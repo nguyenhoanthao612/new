@@ -53,21 +53,21 @@ export interface UploadedDocument {
 export const IC3_MODULES = [
   {
     id: "cf",
-    name: "Máy tính Căn bản (Computing Fundamentals)",
+    name: "CF (LV1) - Máy tính Căn bản (Computing Fundamentals)",
     description: "Kiến thức về phần cứng, phần mềm, hệ điều hành và xử lý sự cố cơ bản.",
     passingScore: 700, // standard scale
     timeLimit: 50, // minutes
   },
   {
     id: "ka",
-    name: "Các ứng dụng Chủ chốt (Key Applications)",
+    name: "KA (LV2) - Các ứng dụng Chủ chốt (Key Applications)",
     description: "Sử dụng thành thạo các ứng dụng văn phòng: xử lý văn bản, bảng tính, trình chiếu.",
     passingScore: 700,
     timeLimit: 50,
   },
   {
     id: "lo",
-    name: "Cuộc sống Trực tuyến (Living Online)",
+    name: "LO (LV3) - Cuộc sống Trực tuyến (Living Online)",
     description: "Kỹ năng mạng internet, truyền thông xã hội, email, an toàn thông tin mạng và tìm kiếm thông tin.",
     passingScore: 700,
     timeLimit: 50,

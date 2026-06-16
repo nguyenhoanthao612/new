@@ -49,6 +49,7 @@ export default function UserDashboard({ onStartPractice, onStartExam }: UserDash
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [docIdToConfirmDelete, setDocIdToConfirmDelete] = useState<string | null>(null);
 
   // Classroom handler
   const handleJoinClass = async (e: React.FormEvent) => {
@@ -116,9 +117,15 @@ export default function UserDashboard({ onStartPractice, onStartExam }: UserDash
   };
 
   const handleDeleteFile = async (docId: string, docName: string) => {
-    if (!window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn tệp "${docName}" không?`)) {
+    if (docIdToConfirmDelete !== docId) {
+      setDocIdToConfirmDelete(docId);
+      // Automatically reset confirmation state after 4 seconds
+      setTimeout(() => {
+        setDocIdToConfirmDelete((curr) => curr === docId ? null : curr);
+      }, 4000);
       return;
     }
+    setDocIdToConfirmDelete(null);
     setUploadError(null);
     setUploadSuccess(null);
     try {
@@ -398,9 +405,18 @@ export default function UserDashboard({ onStartPractice, onStartExam }: UserDash
                         <button
                           id={`del-user-doc-btn-${docItem.id}`}
                           onClick={() => handleDeleteFile(docItem.id, docItem.name)}
-                          className="text-slate-400 hover:text-rose-600 p-1 rounded-md transition"
+                          className={`p-1 rounded-md transition text-xs font-bold leading-none flex items-center gap-1 ${
+                            docIdToConfirmDelete === docItem.id 
+                              ? "text-red-600 bg-red-50 hover:bg-red-100 px-1.5 py-0.5 animate-pulse" 
+                              : "text-slate-400 hover:text-rose-600 hover:bg-slate-100"
+                          }`}
+                          title={docIdToConfirmDelete === docItem.id ? "Nhấp lại để xác nhận xóa tệp" : "Xóa tài liệu"}
                         >
-                          <Trash2 className="w-4 h-4" />
+                          {docIdToConfirmDelete === docItem.id ? (
+                            <span>Xóa?</span>
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
                         </button>
                       </div>
                     );

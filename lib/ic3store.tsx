@@ -16,7 +16,7 @@ import {
   deleteDoc
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { UserProgress, ExamRecord, Classroom, UploadedDocument } from "./ic3data";
+import { UserProgress, ExamRecord, Classroom, UploadedDocument, IC3Question, SAMPLE_QUESTIONS } from "./ic3data";
 
 interface IC3ContextType {
   firebaseUser: User | null;
@@ -27,6 +27,7 @@ interface IC3ContextType {
   examRecords: ExamRecord[];
   documents: UploadedDocument[];
   allUsers: UserProgress[];
+  questions: IC3Question[];
   loginWithEmail: (email: string, password: string) => Promise<void>;
   registerWithEmail: (email: string, password: string, displayName: string, role: "student" | "teacher") => Promise<void>;
   logout: () => Promise<void>;
@@ -37,6 +38,8 @@ interface IC3ContextType {
   updateUserRole: (newRole: "student" | "teacher" | "admin") => Promise<void>;
   uploadDocument: (name: string, size: number, type: string) => Promise<string>;
   deleteDocument: (docId: string) => Promise<void>;
+  addQuestion: (q: Omit<IC3Question, "id">) => Promise<void>;
+  deleteQuestion: (qId: string) => Promise<void>;
 }
 
 const IC3Context = createContext<IC3ContextType | undefined>(undefined);
@@ -49,6 +52,8 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
   const [examRecords, setExamRecords] = useState<ExamRecord[]>([]);
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
   const [allUsers, setAllUsers] = useState<UserProgress[]>([]);
+  const [dbQuestions, setDbQuestions] = useState<IC3Question[]>([]);
+  const [questions, setQuestions] = useState<IC3Question[]>([]);
 
   // Guest users state saved to localStorage
   const [localExamRecords, setLocalExamRecords] = useState<ExamRecord[]>([]);
@@ -72,6 +77,26 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       }
     }
   }, []);
+
+  // Listen to all Questions (Publicly accessible)
+  useEffect(() => {
+    const questionsQuery = collection(db, "questions");
+    const unsubscribe = onSnapshot(questionsQuery, (snapshot) => {
+      const list: IC3Question[] = [];
+      snapshot.forEach((d) => {
+        list.push({ id: d.id, ...d.data() } as IC3Question);
+      });
+      setDbQuestions(list);
+    }, (err) => {
+      console.error("Error listening to questions collection:", err);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Merge static baseline and cloud dynamic database questions
+  useEffect(() => {
+    setQuestions([...SAMPLE_QUESTIONS, ...dbQuestions]);
+  }, [dbQuestions]);
 
   // Listen to Auth state changes - only accept the special Admin UID Mx33zQx6FVP9L7lThJ7YDue9FUI2
   useEffect(() => {
@@ -289,6 +314,22 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const addQuestion = async (q: Omit<IC3Question, "id">) => {
+    if (firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+      await addDoc(collection(db, "questions"), q);
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được tạo câu hỏi mới.");
+    }
+  };
+
+  const deleteQuestion = async (qId: string) => {
+    if (firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+      await deleteDoc(doc(db, "questions", qId));
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được xóa câu hỏi.");
+    }
+  };
+
   return (
     <IC3Context.Provider
       value={{
@@ -300,6 +341,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
         examRecords,
         documents,
         allUsers,
+        questions,
         loginWithEmail,
         registerWithEmail,
         logout,
@@ -309,7 +351,9 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
         saveExamResult,
         updateUserRole,
         uploadDocument,
-        deleteDocument
+        deleteDocument,
+        addQuestion,
+        deleteQuestion
       }}
     >
       {children}

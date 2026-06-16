@@ -154,6 +154,43 @@
         }
       },
       "required": ["userId", "userEmail", "name", "size", "type", "createdAt"]
+    },
+    "IC3Question": {
+      "title": "IC3 Certification Question",
+      "description": "Custom questions created by administrators for specific IC3 Levels.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The question identifier."
+        },
+        "module": {
+          "type": "string",
+          "enum": ["cf", "ka", "lo"],
+          "description": "The IC3 GS6 module/level."
+        },
+        "topic": {
+          "type": "string",
+          "description": "The subtopic of the module."
+        },
+        "questionText": {
+          "type": "string",
+          "description": "The query statement text."
+        },
+        "options": {
+          "type": "array",
+          "description": "Four options for answers."
+        },
+        "correctIndex": {
+          "type": "integer",
+          "description": "Zero-indexed correct answer."
+        },
+        "explanation": {
+          "type": "string",
+          "description": "Explanation for why the option is correct."
+        }
+      },
+      "required": ["module", "topic", "questionText", "options", "correctIndex", "explanation"]
     }
   },
   "firestore": {
@@ -172,6 +209,10 @@
     "/documents/{documentId}": {
       "schema": "UploadedDocument",
       "description": "Metadata store for files uploaded by candidates or teachers for reference or certification verification."
+    },
+    "/questions/{questionId}": {
+      "schema": "IC3Question",
+      "description": "Dynamic questions created by system administrators which supplement baseline static questions."
     }
   }
 }

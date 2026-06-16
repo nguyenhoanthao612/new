@@ -375,14 +375,16 @@ function HomeContent() {
             <a href="#" className="hover:text-slate-600">Điều khoản</a>
             <a href="#" className="hover:text-slate-600">Bảo mật</a>
             <span>•</span>
-            <button 
-              onClick={() => { setAuthFlowState("login"); setActiveScreen("homepage"); }}
-              className="text-slate-500 hover:text-indigo-600 font-extrabold flex items-center gap-1 bg-transparent border-none cursor-pointer"
-              id="footer-admin-login-link"
-            >
-              <Lock className="w-3.5 h-3.5" />
-              Đăng nhập quản trị
-            </button>
+            {!(firebaseUser && activeRole === "admin") && (
+              <button 
+                onClick={() => { setAuthFlowState("login"); setActiveScreen("homepage"); }}
+                className="text-slate-500 hover:text-indigo-600 font-extrabold flex items-center gap-1 bg-transparent border-none cursor-pointer"
+                id="footer-admin-login-link"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                Đăng nhập quản trị
+              </button>
+            )}
           </div>
         </div>
       </footer>
