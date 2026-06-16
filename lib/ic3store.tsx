@@ -1,334 +1,315 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
-import {
-  Lesson,
-  Question,
-  Exam,
-  UserLog,
-  INITIAL_LESSONS,
-  INITIAL_QUESTIONS,
-  INITIAL_EXAMS,
-  INITIAL_USER_LOG
-} from "./ic3data";
+import React, { createContext, useContext, useState, useEffect, useRef } from "react";
+import { 
+  User, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  sendPasswordResetEmail,
+  onAuthStateChanged
+} from "firebase/auth";
+import { 
+  doc, 
+  collection, 
+  addDoc, 
+  onSnapshot,
+  deleteDoc
+} from "firebase/firestore";
+import { auth, db } from "./firebase";
+import { UserProgress, ExamRecord, Classroom, UploadedDocument } from "./ic3data";
 
 interface IC3ContextType {
-  currentUser: UserLog;
-  lessons: Lesson[];
-  questions: Question[];
-  exams: Exam[];
-  
-  // App navigation active role
+  firebaseUser: User | null;
+  userProfile: UserProgress | null;
   activeRole: "student" | "teacher" | "admin";
-  setActiveRole: (role: "student" | "teacher" | "admin") => void;
-  
-  // Actions
-  toggleLessonCompleted: (lessonId: string) => void;
-  saveExamResult: (
-    examId: string,
-    score: number,
-    correctCount: number,
-    totalCount: number,
-    timeSpentSeconds: number,
-    skillPerformance: { [skill: string]: number }
-  ) => void;
-  
-  // Creation/Administration
-  addNewQuestion: (question: Question) => void;
-  editQuestion: (updated: Question) => void;
-  deleteQuestion: (id: string) => void;
-  
-  addNewLesson: (lesson: Lesson) => void;
-  editLesson: (updated: Lesson) => void;
-  deleteLesson: (id: string) => void;
-  
-  // Reset/Seed Management
-  resetSystemData: () => void;
-  exportDatabase: () => string;
-  importDatabase: (jsonStr: string) => boolean;
+  loading: boolean;
+  classrooms: Classroom[];
+  examRecords: ExamRecord[];
+  documents: UploadedDocument[];
+  allUsers: UserProgress[];
+  loginWithEmail: (email: string, password: string) => Promise<void>;
+  registerWithEmail: (email: string, password: string, displayName: string, role: "student" | "teacher") => Promise<void>;
+  logout: () => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
+  joinClassroom: (code: string) => Promise<void>;
+  createClassroom: (name: string) => Promise<string>;
+  saveExamResult: (module: "cf" | "ka" | "lo", correctCount: number, totalQuestions: number, timeSpent: number) => Promise<void>;
+  updateUserRole: (newRole: "student" | "teacher" | "admin") => Promise<void>;
+  uploadDocument: (name: string, size: number, type: string) => Promise<string>;
+  deleteDocument: (docId: string) => Promise<void>;
 }
 
 const IC3Context = createContext<IC3ContextType | undefined>(undefined);
 
 export function IC3Provider({ children }: { children: React.ReactNode }) {
-  const [activeRole, setActiveRole] = useState<"student" | "teacher" | "admin">("student");
-  const [currentUser, setCurrentUser] = useState<UserLog>(INITIAL_USER_LOG);
-  const [lessons, setLessons] = useState<Lesson[]>([]);
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProgress | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
+  const [examRecords, setExamRecords] = useState<ExamRecord[]>([]);
+  const [documents, setDocuments] = useState<UploadedDocument[]>([]);
+  const [allUsers, setAllUsers] = useState<UserProgress[]>([]);
 
-  // Load initial dataset from localStorage or fallback to defaults
+  // Guest users state saved to localStorage
+  const [localExamRecords, setLocalExamRecords] = useState<ExamRecord[]>([]);
+
+  // Track activeRole
+  const activeRole = firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2" ? "admin" : "student";
+
+  // Bootstrap local storage records on startup
   useEffect(() => {
     if (typeof window !== "undefined") {
-      try {
-        const storedLessons = localStorage.getItem("ic3_lessons");
-        const storedQuestions = localStorage.getItem("ic3_questions");
-        const storedUser = localStorage.getItem("ic3_user");
-        const storedExams = localStorage.getItem("ic3_exams");
-
-        setTimeout(() => {
-          if (storedLessons) setLessons(JSON.parse(storedLessons));
-          else {
-            setLessons(INITIAL_LESSONS);
-            localStorage.setItem("ic3_lessons", JSON.stringify(INITIAL_LESSONS));
+      const saved = localStorage.getItem("ic3_local_exams");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            setLocalExamRecords(parsed);
           }
-
-          if (storedQuestions) setQuestions(JSON.parse(storedQuestions));
-          else {
-            setQuestions(INITIAL_QUESTIONS);
-            localStorage.setItem("ic3_questions", JSON.stringify(INITIAL_QUESTIONS));
-          }
-
-          if (storedUser) {
-            const parsedUser = JSON.parse(storedUser);
-            setCurrentUser(parsedUser);
-            setActiveRole(parsedUser.role);
-          } else {
-            setCurrentUser(INITIAL_USER_LOG);
-            localStorage.setItem("ic3_user", JSON.stringify(INITIAL_USER_LOG));
-          }
-
-          if (storedExams) setExams(JSON.parse(storedExams));
-          else {
-            setExams(INITIAL_EXAMS);
-            localStorage.setItem("ic3_exams", JSON.stringify(INITIAL_EXAMS));
-          }
-
-          setIsLoaded(true);
-        }, 0);
-      } catch (err) {
-        console.error("Failed to parse stored IC3 state:", err);
-        // Fallback robustly
-        setTimeout(() => {
-          setLessons(INITIAL_LESSONS);
-          setQuestions(INITIAL_QUESTIONS);
-          setExams(INITIAL_EXAMS);
-          setCurrentUser(INITIAL_USER_LOG);
-          setIsLoaded(true);
-        }, 0);
+        } catch (e) {
+          console.error("Failed to parse local exams", e);
+        }
       }
     }
   }, []);
 
-  // Sync state helpers
-  const saveLessonsToStorage = (updatedLessons: Lesson[]) => {
-    setLessons(updatedLessons);
-    localStorage.setItem("ic3_lessons", JSON.stringify(updatedLessons));
-  };
-
-  const saveQuestionsToStorage = (updatedQuestions: Question[]) => {
-    setQuestions(updatedQuestions);
-    localStorage.setItem("ic3_questions", JSON.stringify(updatedQuestions));
-  };
-
-  const saveUserToStorage = (updatedUser: UserLog) => {
-    setCurrentUser(updatedUser);
-    localStorage.setItem("ic3_user", JSON.stringify(updatedUser));
-  };
-
-  const saveExamsToStorage = (updatedExams: Exam[]) => {
-    setExams(updatedExams);
-    localStorage.setItem("ic3_exams", JSON.stringify(updatedExams));
-  };
-
-  // Toggle lesson completion
-  const toggleLessonCompleted = (lessonId: string) => {
-    const wasCompleted = currentUser.completedLessons.includes(lessonId);
-    let updatedCompleted: string[];
-
-    if (wasCompleted) {
-      updatedCompleted = currentUser.completedLessons.filter((id) => id !== lessonId);
-    } else {
-      updatedCompleted = [...currentUser.completedLessons, lessonId];
-    }
-
-    const totalLessonCount = lessons.length || 10;
-    const progressPercent = Math.round((updatedCompleted.length / totalLessonCount) * 100);
-
-    const updatedUser: UserLog = {
-      ...currentUser,
-      completedLessons: updatedCompleted,
-      progressPercent,
-    };
-    saveUserToStorage(updatedUser);
-  };
-
-  // Save an exam attempt log
-  const saveExamResult = (
-    examId: string,
-    score: number,
-    correctCount: number,
-    totalCount: number,
-    timeSpentSeconds: number,
-    skillPerformance: { [skill: string]: number }
-  ) => {
-    const exam = exams.find((e) => e.id === examId);
-    const passed = score >= (exam?.passingScorePercent || 70);
-
-    const newLogItem = {
-      examId,
-      title: exam?.title || "Bài luyện tập",
-      score,
-      correctCount,
-      totalCount,
-      timeSpentSeconds,
-      date: new Date().toISOString().split("T")[0],
-      passed,
-      skillPerformance,
-    };
-
-    const updatedHistory = [newLogItem, ...currentUser.examHistory];
-    const updatedUser: UserLog = {
-      ...currentUser,
-      examHistory: updatedHistory,
-    };
-    saveUserToStorage(updatedUser);
-  };
-
-  // Manage Question state
-  const addNewQuestion = (question: Question) => {
-    const updated = [...questions, question];
-    saveQuestionsToStorage(updated);
-    
-    // Also append this question to related exam if requested
-    const relatedExam = exams.find((e) => e.moduleId === question.moduleId);
-    if (relatedExam) {
-      const updatedExams = exams.map((exp) => {
-        if (exp.id === relatedExam.id) {
-          return {
-            ...exp,
-            questions: [...exp.questions, question],
-          };
+  // Listen to Auth state changes - only accept the special Admin UID Mx33zQx6FVP9L7lThJ7YDue9FUI2
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        if (user.uid !== "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+          console.warn("[SECURITY ENFORCEMENT] Non-admin UID blocked. Automatic signing out.", user.uid);
+          await signOut(auth);
+          setFirebaseUser(null);
+          setUserProfile(null);
+          setLoading(false);
+          return;
         }
-        return exp;
-      });
-      saveExamsToStorage(updatedExams);
-    }
-  };
 
-  const editQuestion = (updated: Question) => {
-    const updatedList = questions.map((q) => (q.id === updated.id ? updated : q));
-    saveQuestionsToStorage(updatedList);
-
-    // Update in standard exams
-    const updatedExams = exams.map((exp) => {
-      const exists = exp.questions.some((q) => q.id === updated.id);
-      if (exists) {
-        return {
-          ...exp,
-          questions: exp.questions.map((q) => (q.id === updated.id ? updated : q)),
+        setFirebaseUser(user);
+        const adminProfile: UserProgress = {
+          userId: user.uid,
+          role: "admin",
+          displayName: "Quản Trị Viên",
+          email: user.email || "admin@ic3master.com",
+          createdAt: Date.now()
         };
+        setUserProfile(adminProfile);
+      } else {
+        setFirebaseUser(null);
+        setUserProfile(null);
+        setClassrooms([]);
+        setDocuments([]);
+        setAllUsers([]);
       }
-      return exp;
+      setLoading(false);
     });
-    saveExamsToStorage(updatedExams);
-  };
 
-  const deleteQuestion = (id: string) => {
-    const updatedList = questions.filter((q) => q.id !== id);
-    saveQuestionsToStorage(updatedList);
+    return () => unsubscribe();
+  }, []);
 
-    // Remove from in-memory exams as well
-    const updatedExams = exams.map((exp) => ({
-      ...exp,
-      questions: exp.questions.filter((q) => q.id !== id),
-    }));
-    saveExamsToStorage(updatedExams);
-  };
+  // Listen to cloud collections IF admin is logged in. Otherwise, fall back to local elements.
+  useEffect(() => {
+    if (!firebaseUser || firebaseUser.uid !== "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+      setExamRecords(localExamRecords);
+      setClassrooms([]);
+      setDocuments([]);
+      setAllUsers([]);
+      return;
+    }
 
-  // Manage Lessons state
-  const addNewLesson = (lesson: Lesson) => {
-    const updated = [...lessons, lesson];
-    saveLessonsToStorage(updated);
-  };
+    let unsubExams = () => {};
+    let unsubClasses = () => {};
+    let unsubDocs = () => {};
+    let unsubUsers = () => {};
 
-  const editLesson = (updated: Lesson) => {
-    const updatedList = lessons.map((l) => (l.id === updated.id ? updated : l));
-    saveLessonsToStorage(updatedList);
-  };
+    // 1. Listen to all Exams
+    const examsQuery = collection(db, "exams");
+    unsubExams = onSnapshot(examsQuery, (snapshot) => {
+      const records: ExamRecord[] = [];
+      snapshot.forEach((d) => {
+        records.push({ id: d.id, ...d.data() } as ExamRecord);
+      });
+      setExamRecords(records.sort((a, b) => b.createdAt - a.createdAt));
+    }, (err) => {
+      console.error("Error listening to exams collection:", err);
+    });
 
-  const deleteLesson = (id: string) => {
-    const updatedList = lessons.filter((l) => l.id !== id);
-    saveLessonsToStorage(updatedList);
-  };
+    // 2. Listen to all Classrooms
+    const classesQuery = collection(db, "classrooms");
+    unsubClasses = onSnapshot(classesQuery, (snapshot) => {
+      const list: Classroom[] = [];
+      snapshot.forEach((d) => {
+        list.push({ id: d.id, ...d.data() } as Classroom);
+      });
+      setClassrooms(list);
+    }, (err) => {
+      console.error("Error listening to classrooms collection:", err);
+    });
 
-  const resetSystemData = () => {
-    localStorage.removeItem("ic3_lessons");
-    localStorage.removeItem("ic3_questions");
-    localStorage.removeItem("ic3_user");
-    localStorage.removeItem("ic3_exams");
-    
-    setLessons(INITIAL_LESSONS);
-    setQuestions(INITIAL_QUESTIONS);
-    setCurrentUser(INITIAL_USER_LOG);
-    setExams(INITIAL_EXAMS);
-    setActiveRole("student");
+    // 3. Listen to all Users
+    const usersQuery = collection(db, "users");
+    unsubUsers = onSnapshot(usersQuery, (snapshot) => {
+      const list: UserProgress[] = [];
+      snapshot.forEach((d) => {
+        list.push({ ...d.data(), userId: d.id } as UserProgress);
+      });
+      setAllUsers(list);
+    }, (err) => {
+      console.error("Error listening to users collection:", err);
+    });
 
-    localStorage.setItem("ic3_lessons", JSON.stringify(INITIAL_LESSONS));
-    localStorage.setItem("ic3_questions", JSON.stringify(INITIAL_QUESTIONS));
-    localStorage.setItem("ic3_user", JSON.stringify(INITIAL_USER_LOG));
-    localStorage.setItem("ic3_exams", JSON.stringify(INITIAL_EXAMS));
-  };
+    // 4. Listen to all Documents
+    const docsQuery = collection(db, "documents");
+    unsubDocs = onSnapshot(docsQuery, (snapshot) => {
+      const list: UploadedDocument[] = [];
+      snapshot.forEach((d) => {
+        list.push({ id: d.id, ...d.data() } as UploadedDocument);
+      });
+      setDocuments(list.sort((a, b) => b.createdAt - a.createdAt));
+    }, (err) => {
+      console.error("Error listening to documents collection:", err);
+    });
 
-  const exportDatabase = (): string => {
-    const data = {
-      lessons,
-      questions,
-      exams,
-      currentUser
+    return () => {
+      unsubExams();
+      unsubClasses();
+      unsubDocs();
+      unsubUsers();
     };
-    return JSON.stringify(data, null, 2);
-  };
+  }, [firebaseUser, localExamRecords]);
 
-  const importDatabase = (jsonStr: string): boolean => {
+  // Authenticate Admin
+  const loginWithEmail = async (email: string, password: string) => {
+    setLoading(true);
     try {
-      const parsed = JSON.parse(jsonStr);
-      if (parsed.lessons && parsed.questions && parsed.currentUser) {
-        saveLessonsToStorage(parsed.lessons);
-        saveQuestionsToStorage(parsed.questions);
-        saveUserToStorage(parsed.currentUser);
-        if (parsed.exams) saveExamsToStorage(parsed.exams);
-        setActiveRole(parsed.currentUser.role || "student");
-        return true;
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      if (credential.user.uid !== "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+        await signOut(auth);
+        throw new Error("Tài khoản không phải Quản trị viên duy nhất của hệ thống.");
       }
-      return false;
     } catch (e) {
-      console.error("Database import crash:", e);
-      return false;
+      setLoading(false);
+      throw e;
     }
   };
 
-  const handleRoleChange = (role: "student" | "teacher" | "admin") => {
-    setActiveRole(role);
-    const updatedUser = { ...currentUser, role };
-    saveUserToStorage(updatedUser);
+  // Reg is fully deactivated for regular users
+  const registerWithEmail = async () => {
+    throw new Error("Chức năng đăng ký tài khoản tự do đã đóng. Mọi thí sinh có thể ôn luyện tự do trực tiếp không cần tài khoản.");
   };
 
-  if (!isLoaded) {
-    return null; // Safe fallback during initialization to match server render
-  }
+  const logout = async () => {
+    setLoading(true);
+    await signOut(auth);
+    setFirebaseUser(null);
+    setUserProfile(null);
+    setClassrooms([]);
+    setExamRecords(localExamRecords);
+    setDocuments([]);
+    setAllUsers([]);
+    setLoading(false);
+  };
+
+  const resetPassword = async (email: string) => {
+    await sendPasswordResetEmail(auth, email);
+  };
+
+  // Stubs for inactive user roles features
+  const joinClassroom = async () => {
+    throw new Error("Hệ thống lớp học đã được tối giản hóa sang hình thức học tập công khai tự do.");
+  };
+
+  const createClassroom = async () => {
+    throw new Error("Không hỗ trợ tạo lớp học mới đơn lẻ.");
+  };
+
+  const updateUserRole = async () => {
+    throw new Error("Không hỗ trợ thay đổi vai trò tài khoản.");
+  };
+
+  const uploadDocument = async () => {
+    throw new Error("Chức năng tải lên tài liệu cá nhân đã bị đóng.");
+  };
+
+  const deleteDocument = async (docId: string) => {
+    if (firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+      await deleteDoc(doc(db, "documents", docId));
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được xóa tài liệu.");
+    }
+  };
+
+  // Saves simulated exam results dynamically (either locally for guests or to Firestore for Admin)
+  const saveExamResult = async (
+    module: "cf" | "ka" | "lo",
+    correctCount: number,
+    totalQuestions: number,
+    timeSpent: number
+  ) => {
+    const ratio = correctCount / totalQuestions;
+    const scoreVal = Math.round(ratio * 1000);
+    const passed = scoreVal >= 700;
+
+    const record: Omit<ExamRecord, "id"> = {
+      userId: firebaseUser ? firebaseUser.uid : "guest_candidate",
+      studentName: firebaseUser ? "Quản Trị Viên" : "Thí sinh tự do",
+      module,
+      score: scoreVal,
+      correctCount,
+      totalQuestions,
+      timeSpent,
+      passed,
+      createdAt: Date.now()
+    };
+
+    if (firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+      try {
+        await addDoc(collection(db, "exams"), record);
+      } catch (err) {
+        console.warn("Firestore save failed, saving locally instead:", err);
+        const newLocalRecord: ExamRecord = {
+          id: `local_${Date.now()}`,
+          ...record
+        };
+        const updated = [newLocalRecord, ...localExamRecords];
+        setLocalExamRecords(updated);
+        localStorage.setItem("ic3_local_exams", JSON.stringify(updated));
+      }
+    } else {
+      const newLocalRecord: ExamRecord = {
+        id: `local_${Date.now()}`,
+        ...record
+      };
+      const updated = [newLocalRecord, ...localExamRecords];
+      setLocalExamRecords(updated);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("ic3_local_exams", JSON.stringify(updated));
+      }
+    }
+  };
 
   return (
     <IC3Context.Provider
       value={{
-        currentUser,
-        lessons,
-        questions,
-        exams,
+        firebaseUser,
+        userProfile,
         activeRole,
-        setActiveRole: handleRoleChange,
-        toggleLessonCompleted,
+        loading,
+        classrooms,
+        examRecords,
+        documents,
+        allUsers,
+        loginWithEmail,
+        registerWithEmail,
+        logout,
+        resetPassword,
+        joinClassroom,
+        createClassroom,
         saveExamResult,
-        addNewQuestion,
-        editQuestion,
-        deleteQuestion,
-        addNewLesson,
-        editLesson,
-        deleteLesson,
-        resetSystemData,
-        exportDatabase,
-        importDatabase
+        updateUserRole,
+        uploadDocument,
+        deleteDocument
       }}
     >
       {children}
@@ -338,8 +319,8 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
 
 export function useIC3() {
   const context = useContext(IC3Context);
-  if (!context) {
-    throw new Error("useIC3 must be called within an IC3Provider context wrapper");
+  if (context === undefined) {
+    throw new Error("useIC3 must be used within an IC3Provider");
   }
   return context;
 }

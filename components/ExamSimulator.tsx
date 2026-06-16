@@ -1,528 +1,361 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { useIC3 } from "@/lib/ic3store";
-import { Exam, Question } from "@/lib/ic3data";
-import QuestionSimulation from "./QuestionSimulations";
-import { Flag, Clock, ArrowRight, ShieldAlert, CheckCircle, AlertTriangle, RefreshCw, Eye, BookOpen, User, HelpCircle, FileText, BarChart3 } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import { useIC3 } from "../lib/ic3store";
+import { SAMPLE_QUESTIONS, IC3_MODULES } from "../lib/ic3data";
+import { Timer, ArrowLeft, ArrowRight, CheckCircle2, XCircle, AlertTriangle, RefreshCw } from "lucide-react";
 
-export default function ExamSimulator({ examId, onBackToHome }: { examId: string; onBackToHome: () => void }) {
-  const { exams, saveExamResult } = useIC3();
-  const exam = exams.find((e) => e.id === examId) as Exam;
-  const questions = exam ? (exam.questions || []) : [];
+interface ExamSimulatorProps {
+  module: "cf" | "ka" | "lo";
+  onClose: () => void;
+}
 
-  // Active exam states
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, any>>({});
-  const [flaggedQuestions, setFlaggedQuestions] = useState<Record<string, boolean>>({});
-  const [timeLeftSeconds, setTimeLeftSeconds] = useState(exam ? exam.durationMinutes * 60 : 45 * 60);
-  const [isSubmitted, setIsSubmitted] = useState(false);
-  
-  // Anti cheat counts simulation
-  const [cheatWarnings, setCheatWarnings] = useState(0);
-  const [showCheatModal, setShowCheatModal] = useState(false);
+export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
+  const { saveExamResult } = useIC3();
 
-  // Result statistics loaded post-exam
-  const [resultSummary, setResultSummary] = useState<{
-    score: number;
-    correctCount: number;
-    totalCount: number;
-    timeSpentSeconds: number;
-    passed: boolean;
-    skillRatings: { [skill: string]: { correct: number; total: number } };
-  } | null>(null);
+  const moduleInfo = IC3_MODULES.find((m) => m.id === module)!;
+  const questions = SAMPLE_QUESTIONS.filter((q) => q.module === module);
 
-  // Refs for tracking time
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const initialDuration = exam ? exam.durationMinutes * 60 : 45 * 60;
+  // States
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
+  const [timeRemaining, setTimeRemaining] = useState(moduleInfo.timeLimit * 60); // in seconds
+  const [examStatus, setExamStatus] = useState<"ready" | "testing" | "completed">("ready");
+  const [score, setScore] = useState<{ correct: number; total: number; score1000: number; passed: boolean } | null>(null);
 
-  // Helper verifying 8 question response types
-  function verifyQuestionAnswer(q: Question, ans: any): boolean {
-    if (ans === undefined || ans === null) return false;
+  const currentQuestion = questions[currentQuestionIndex];
 
-    if (q.type === "single-choice" || q.type === "true-false" || q.type === "video") {
-      return ans === q.correctSingle;
-    }
-
-    if (q.type === "multiple-response") {
-      const userList = (ans as string[]) || [];
-      const correctList = q.correctMultiple || [];
-      if (userList.length !== correctList.length) return false;
-      return correctList.every((item) => userList.includes(item));
-    }
-
-    if (q.type === "matching") {
-      const userMap = (ans as Record<string, string>) || {};
-      const pairs = q.matchingPairs || [];
-      if (Object.keys(userMap).length < pairs.length) return false;
-      return pairs.every((p) => userMap[p.left] === p.right);
-    }
-
-    if (q.type === "drag-drop") {
-      const userMap = (ans as Record<number, string>) || {};
-      const targets = q.dragTargets || [];
-      return targets.every((t, idx) => userMap[idx] === t.expectedItem);
-    }
-
-    if (q.type === "hotspot") {
-      return ans === q.hotspots?.find((h) => h.isCorrect)?.id;
-    }
-
-    if (q.type === "performance") {
-      const userFolders = (ans?.folders as string[]) || [];
-      const expectedFolders = (q.performanceTask?.expectedState?.folders as string[]) || [];
-      if (userFolders.length !== expectedFolders.length) return false;
-      return expectedFolders.every((f) => userFolders.includes(f));
-    }
-
-    return false;
-  }
-
-  // Automated scoring formula
-  function gradeExam(customAnswers = answers) {
+  // Auto-submit Callback
+  const submitExam = useCallback(async () => {
     let correctCount = 0;
-    const skillRatings: { [skill: string]: { correct: number; total: number } } = {};
-
     questions.forEach((q) => {
-      const userAns = customAnswers[q.id];
-      const isCorrect = verifyQuestionAnswer(q, userAns);
-
-      if (isCorrect) correctCount++;
-
-      // Map skill performance
-      const skills = q.skills || ["Kiến thức chung"];
-      skills.forEach((skill) => {
-        if (!skillRatings[skill]) {
-          skillRatings[skill] = { correct: 0, total: 0 };
-        }
-        skillRatings[skill].total += 1;
-        if (isCorrect) {
-          skillRatings[skill].correct += 1;
-        }
-      });
+      if (selectedAnswers[q.id] === q.correctIndex) {
+        correctCount += 1;
+      }
     });
 
-    const totalCount = questions.length || 1;
-    const score = Math.round((correctCount / totalCount) * 100);
-    const passed = score >= exam.passingScorePercent;
-    const timeSpentSeconds = initialDuration - timeLeftSeconds;
+    const totalCount = questions.length;
+    const score1000 = Math.round((correctCount / totalCount) * 1000);
+    const passed = score1000 >= 700;
 
-    return {
-      score,
-      correctCount,
-      totalCount,
-      timeSpentSeconds,
+    const timeSpent = moduleInfo.timeLimit * 60 - timeRemaining;
+
+    setScore({
+      correct: correctCount,
+      total: totalCount,
+      score1000,
       passed,
-      skillRatings,
-    };
-  }
-
-  function executeSubmission() {
-    if (timerRef.current) clearInterval(timerRef.current);
-    
-    const results = gradeExam();
-    
-    // Convert skills rating to logs object
-    const skillPerformance: { [skill: string]: number } = {};
-    Object.keys(results.skillRatings).forEach((skill) => {
-      const rateObj = results.skillRatings[skill];
-      skillPerformance[skill] = Math.round((rateObj.correct / rateObj.total) * 100);
     });
 
-    saveExamResult(
-      exam.id,
-      results.score,
-      results.correctCount,
-      results.totalCount,
-      results.timeSpentSeconds,
-      skillPerformance
-    );
+    setExamStatus("completed");
 
-    setResultSummary(results);
-    setIsSubmitted(true);
-  }
-
-  function autoSubmitExam() {
-    executeSubmission();
-  }
-
-  function submitExam() {
-    if (window.confirm("Bạn có chắc chắn muốn nộp bài thi thử ngay bây giờ?")) {
-      executeSubmission();
+    try {
+      await saveExamResult(module, correctCount, totalCount, timeSpent);
+    } catch (e) {
+      console.error("Lỗi khi lưu kết quả thi:", e);
     }
-  }
+  }, [questions, selectedAnswers, module, saveExamResult, moduleInfo.timeLimit, timeRemaining]);
 
-  // 1. Tick counting down timer
+  // Handle countdown timer
   useEffect(() => {
-    if (!isSubmitted && timeLeftSeconds > 0) {
-      timerRef.current = setInterval(() => {
-        setTimeLeftSeconds((t) => {
-          if (t <= 1) {
-            clearInterval(timerRef.current!);
-            autoSubmitExam();
-            return 0;
-          }
-          return t - 1;
-        });
-      }, 1000);
+    if (examStatus !== "testing") return;
+
+    if (timeRemaining <= 0) {
+      submitExam();
+      return;
     }
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isSubmitted, timeLeftSeconds]);
+    const timer = setInterval(() => {
+      setTimeRemaining((prev) => prev - 1);
+    }, 1000);
 
-  // 2. Anti-cheat monitoring tab blur
-  useEffect(() => {
-    const handleWindowBlur = () => {
-      if (isSubmitted) return;
-      setCheatWarnings((w) => {
-        const next = w + 1;
-        if (next <= 3) {
-          setShowCheatModal(true);
-        }
-        return next;
-      });
-    };
+    return () => clearInterval(timer);
+  }, [timeRemaining, examStatus, submitExam]);
 
-    window.addEventListener("blur", handleWindowBlur);
-    return () => window.removeEventListener("blur", handleWindowBlur);
-  }, [isSubmitted]);
-
-  if (!exam) {
-    return (
-      <div className="p-8 text-center" id="exam-not-found">
-        <p className="text-red-500 font-bold">Không tìm thấy mã đề thi thích hợp!</p>
-        <button id="back-to-home-btn" onClick={onBackToHome} className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded">Quay lại</button>
-      </div>
-    );
-  }
-
-  const currentQuestion = questions[currentIndex];
-
-  const handleAnswerChange = (ans: any) => {
-    setAnswers({
-      ...answers,
-      [currentQuestion.id]: ans,
-    });
+  const handleStartExam = () => {
+    setTimeRemaining(moduleInfo.timeLimit * 60);
+    setSelectedAnswers({});
+    setCurrentQuestionIndex(0);
+    setExamStatus("testing");
+    setScore(null);
   };
 
-  const toggleFlagged = (qId: string) => {
-    setFlaggedQuestions({
-      ...flaggedQuestions,
-      [qId]: !flaggedQuestions[qId],
-    });
-  };
-
+  // Format time (MM:SS)
   const formatTime = (secs: number) => {
-    const min = Math.floor(secs / 60);
-    const sec = secs % 60;
-    return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+    const mins = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${mins.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  // Close cheat modal warning alert
-  const handleAcknowledgeCheat = () => {
-    setShowCheatModal(false);
+  const handleSelectOption = (optionIndex: number) => {
+    if (examStatus !== "testing") return;
+    setSelectedAnswers((prev) => ({
+      ...prev,
+      [currentQuestion.id]: optionIndex
+    }));
   };
 
-  // ACTIVE EXAM WORKPLACE
-  if (!isSubmitted) {
-    return (
-      <div className="max-w-7xl mx-auto py-6 px-4 grid grid-cols-1 lg:grid-cols-12 gap-6" id="active-test-suite">
-        {/* Anti-cheat warning custom dialog */}
-        {showCheatModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="cheat-alarm-modal">
-            <div className="bg-white rounded-2xl border-4 border-red-500 shadow-2xl p-6 max-w-md w-full space-y-4">
-              <div className="flex items-center space-x-3 text-red-600">
-                <ShieldAlert className="h-10 w-10 shrink-0" />
-                <h3 className="text-xl font-black uppercase tracking-wider">Hệ thống Giám thị Cảnh báo</h3>
-              </div>
-              <p className="text-sm text-gray-700 leading-relaxed font-semibold">
-                Phát hiện dời tiêu điểm trình duyệt máy tính hoặc mở ứng dụng hỗ trợ ngoài. Trong kỳ thi Certiport chính thức, hành động này có thể lập tức đình chỉ thi!
-              </p>
-              <div className="bg-red-50 p-3 rounded-lg border border-red-100 text-xs text-red-900 font-bold">
-                ⚠️ Hiện tại bạn đã Vi phạm: {cheatWarnings} / 3 lần. Nếu vi phạm quá 3 lần, hệ thống sẽ tự động hạ mức xét tốt nghiệp thử!
-              </div>
-              <button
-                id="ack-cheat-btn"
-                type="button"
-                onClick={handleAcknowledgeCheat}
-                className="w-full py-2.5 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 text-xs tracking-wider cursor-pointer shadow"
-              >
-                Tôi đã hiểu & Cam kết không gian lận
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* LEFT WORKSPACE: Main Question & Instructions */}
-        <div className="lg:col-span-8 space-y-4">
-          {/* Header Dashboard panel */}
-          <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between shadow">
-            <div className="flex items-center space-x-3">
-              <Clock className="h-4.5 w-4.5 text-blue-400" />
-              <span className="font-mono text-lg font-bold text-blue-300" id="exam-clock-time">
-                {formatTime(timeLeftSeconds)}
-              </span>
-              <span className="text-[10px] text-slate-400 font-bold">/ {exam.durationMinutes} phút</span>
-            </div>
-
-            <div className="flex items-center space-x-3">
-              <button
-                id="flag-current-question"
-                onClick={() => toggleFlagged(currentQuestion.id)}
-                className={`py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
-                  flaggedQuestions[currentQuestion.id]
-                    ? "bg-rose-500 hover:bg-rose-600 text-white"
-                    : "bg-slate-800 hover:bg-slate-700 text-gray-300"
-                }`}
-              >
-                <Flag className="h-3.h-3 fill-current" />
-                Đánh dấu xem lại
-              </button>
-
-              <button
-                id="submit-exam-early-btn"
-                onClick={submitExam}
-                className="px-4 py-1.5 bg-green-600 hover:bg-green-700 rounded-lg text-xs font-bold text-white shadow cursor-pointer transition"
-              >
-                Nộp bài thi
-              </button>
-            </div>
-          </div>
-
-          {/* Exam body box workspace */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 md:p-8 space-y-6 min-h-[460px]">
-            <div className="flex items-center justify-between border-b border-gray-150 pb-4">
-              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest font-mono">
-                Câu Hỏi {currentIndex + 1} ({currentQuestion.topic})
-              </div>
-              <span className="text-[10px] bg-slate-100 text-gray-600 font-bold font-mono px-2 py-0.5 rounded uppercase">
-                {currentQuestion.type}
-              </span>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-lg font-bold text-gray-900 leading-snug">
-                {currentQuestion.questionText}
-              </h3>
-              
-              <div className="pt-4 border-t border-gray-100">
-                <QuestionSimulation
-                  question={currentQuestion}
-                  currentAnswer={answers[currentQuestion.id]}
-                  onChangeAnswer={handleAnswerChange}
-                  showFeedback={false} // NEVER show answers during actual exam simulation
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Exam navigation buttons bar */}
-          <div className="flex items-center justify-between pt-4">
-            <button
-              id="back-btn-action-exam"
-              onClick={() => currentIndex > 0 && setCurrentIndex(currentIndex - 1)}
-              disabled={currentIndex === 0}
-              className="px-4 py-2.5 border border-gray-200 hover:bg-gray-100 rounded-xl bg-white text-xs font-bold font-mono text-gray-600 disabled:opacity-20 cursor-pointer disabled:pointer-events-none"
-            >
-              Quay lại (Back)
-            </button>
-
-            <button
-              id="forward-btn-action-exam"
-              onClick={() => currentIndex < questions.length - 1 && setCurrentIndex(currentIndex + 1)}
-              disabled={currentIndex === questions.length - 1}
-              className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-bold font-mono shadow-xs cursor-pointer transition disabled:opacity-20 disabled:pointer-events-none"
-            >
-              Tiếp theo (Next)
-            </button>
-          </div>
-        </div>
-
-        {/* RIGHT SIDEBAR: Grid navigator of all questions */}
-        <div className="lg:col-span-4 space-y-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-            <div>
-              <h3 className="font-bold text-xs text-slate-800">Bảng điều hướng câu hỏi</h3>
-              <p className="text-[9px] text-slate-400">Xem nhanh tiến trình làm bài thi thử của bạn</p>
-            </div>
-
-            <div className="grid grid-cols-4 sm:grid-cols-5 lg:grid-cols-4 gap-1.5">
-              {questions.map((q, idx) => {
-                const isAnswered = answers[q.id] !== undefined;
-                const isFlagged = flaggedQuestions[q.id] || false;
-                const isActive = currentIndex === idx;
-
-                let cellColor = "border-slate-200 text-slate-600 hover:bg-slate-50";
-                if (isAnswered) {
-                  cellColor = "bg-blue-50 border-blue-200 text-blue-700 font-bold";
-                }
-                if (isFlagged) {
-                  cellColor = "bg-rose-50 border-rose-250 text-rose-700 font-bold";
-                }
-                if (isActive) {
-                  cellColor = "ring-2 ring-blue-600 ring-offset-2 border-blue-600 font-black";
-                }
-
-                return (
-                  <button
-                    key={q.id}
-                    id={`nav-grid-cell-${idx}`}
-                    type="button"
-                    onClick={() => setCurrentIndex(idx)}
-                    className={`h-9 rounded border text-[11px] text-center flex flex-col justify-center items-center transition cursor-pointer relative ${cellColor}`}
-                  >
-                    <span className="font-mono text-xs font-bold">{idx + 1}</span>
-                    {isFlagged && <div className="absolute top-0.5 right-0.5 w-1 h-1 bg-rose-500 rounded-full" />}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="pt-3 border-t border-slate-150 space-y-1.5 text-[9px] text-slate-400 font-mono">
-              <div className="flex items-center space-x-2">
-                <div className="w-2.5 h-2.5 bg-blue-50 border border-blue-200 rounded" />
-                <span>Đã ghi nhận đáp án</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className="w-2.5 h-2.5 bg-rose-50 border border-rose-200 rounded" />
-                <span>Đã đánh dấu xem lại (Flagged)</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className="w-2.5 h-2.5 border border-slate-200 rounded" />
-                <span>Chưa hoàn thành</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className="w-2.5 h-2.5 border-2 border-blue-600 rounded" />
-                <span>Câu đang hiển thị</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // 3. SUBMITTED VIEW (DETAILED DIAGNOSTICS PERFORMANCE METRICS)
   return (
-    <div className="max-w-4xl mx-auto py-8 px-4 space-y-6 animate-fade-in" id="test-results-screen">
-      <div className="bg-white rounded-3xl border border-gray-200 shadow-lg overflow-hidden">
-        {/* Banner header achievement */}
-        <div className={`p-8 text-white flex flex-col md:flex-row items-center justify-between text-left gap-6 ${
-          resultSummary?.passed ? "bg-gradient-to-r from-emerald-600 to-teal-800" : "bg-gradient-to-r from-rose-600 to-red-800"
-        }`}>
-          <div className="space-y-2">
-            <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 bg-white/20 border border-white/10 rounded-full">
-              KẾT QUẢ THI KHẢO THÍ IC3 THỬ
+    <div className="bg-slate-900 text-slate-100 border border-slate-800 rounded-xl p-6 md:p-8 shadow-md" id="exam-simulator-stage">
+      {/* Intro Frame / Pre-Exam State */}
+      {examStatus === "ready" && (
+        <div className="text-center py-8 space-y-6 max-w-xl mx-auto" id="stage-ready">
+          <h2 className="text-3xl font-extrabold font-display tracking-tight text-white">
+            Chuẩn bị thi thử IC3
+          </h2>
+          <div className="bg-slate-800/50 border border-slate-700/60 rounded-xl p-5 text-left text-slate-300 space-y-3">
+            <p className="font-semibold text-white">Chi tiết phòng thi:</p>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-slate-400">Phân môn:</span>
+                <p className="font-medium text-white">{moduleInfo.name}</p>
+              </div>
+              <div>
+                <span className="text-slate-400">Số lượng câu hỏi:</span>
+                <p className="font-medium text-white">{questions.length} câu trắc nghiệm</p>
+              </div>
+              <div>
+                <span className="text-slate-400">Thời gian làm bài:</span>
+                <p className="font-medium text-white">{moduleInfo.timeLimit} phút</p>
+              </div>
+              <div>
+                <span className="text-slate-400">Điểm tối thiểu đạt:</span>
+                <p className="font-medium text-emerald-400">700 / 1000 điểm</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-amber-300 bg-amber-500/10 border border-amber-500/20 px-4 py-3 rounded-lg text-sm text-center">
+            <AlertTriangle className="w-5 h-5 shrink-0" />
+            <span>Màn hình sẽ hiển thị bộ đếm giờ. Vui lòng không tải lại trang khi đang thi.</span>
+          </div>
+
+          <div className="flex gap-4 justify-center pt-2">
+            <button
+              id="back-btn"
+              onClick={onClose}
+              className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-lg transition"
+            >
+              Quay lại danh mục
+            </button>
+            <button
+              id="start-exam-btn"
+              onClick={handleStartExam}
+              className="px-8 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-lg shadow-md transition"
+            >
+              Bắt đầu Thi thử
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Active Testing State */}
+      {examStatus === "testing" && (
+        <div className="space-y-6" id="stage-testing">
+          {/* Header Progress and Timer */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+            <div>
+              <p className="text-xs font-semibold uppercase text-blue-400 tracking-wider">
+                Đang thi thử • {moduleInfo.name}
+              </p>
+              <h3 className="text-lg font-bold text-white mt-0.5">
+                Câu hỏi {currentQuestionIndex + 1} / {questions.length}
+              </h3>
+            </div>
+
+            <div className="flex items-center gap-3 bg-slate-800/80 border border-slate-700 px-4 py-2 rounded-lg" id="timer-box">
+              <Timer className="w-5 h-5 text-emerald-400" />
+              <div className="text-right">
+                <span className="text-xs text-slate-400 font-mono block">Thời gian còn lại</span>
+                <span className="text-lg font-bold font-mono text-emerald-400">
+                  {formatTime(timeRemaining)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Nav Circle Bar */}
+          <div className="flex flex-wrap gap-2 py-1 max-h-24 overflow-y-auto bg-slate-950/40 border border-slate-800/80 p-3 rounded-lg" id="quick-nav-panel">
+            {questions.map((q, idx) => (
+              <button
+                key={q.id}
+                id={`quick-nav-${idx}`}
+                onClick={() => setCurrentQuestionIndex(idx)}
+                className={`w-9 h-9 rounded-lg text-xs font-semibold transition ${currentQuestionIndex === idx ? "bg-blue-600 text-white border border-blue-500 scale-110" : selectedAnswers[q.id] !== undefined ? "bg-slate-700 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}
+              >
+                {idx + 1}
+              </button>
+            ))}
+          </div>
+
+          {/* Question Text Card */}
+          <div className="bg-slate-800/40 border border-slate-800 rounded-xl p-6" id="active-question-card">
+            <span className="text-xs font-bold text-indigo-400 uppercase tracking-widest block mb-2">
+              Chủ đề: {currentQuestion.topic}
             </span>
-            <h2 className="text-3xl font-black text-white leading-tight">
-              {resultSummary?.passed ? "Xin chúc mừng! Bạn đã đạt yêu cầu" : "Rất tiếc! Cần ôn luyện thêm điểm số để đạt yêu cầu"}
+            <h4 className="text-lg md:text-xl font-medium text-white leading-relaxed">
+              {currentQuestion.questionText}
+            </h4>
+          </div>
+
+          {/* Options List */}
+          <div className="grid grid-cols-1 gap-3" id="testing-options-grid">
+            {currentQuestion.options.map((opt, idx) => {
+              const isChecked = selectedAnswers[currentQuestion.id] === idx;
+              return (
+                <button
+                  key={idx}
+                  id={`option-btn-${idx}`}
+                  onClick={() => handleSelectOption(idx)}
+                  className={`flex items-start text-left gap-4 p-4 border rounded-xl transition ${isChecked ? "bg-blue-600/10 border-blue-500 text-white" : "bg-slate-800/30 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white"}`}
+                >
+                  <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border shrink-0 ${isChecked ? "bg-blue-600 border-blue-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400"}`}>
+                    {String.fromCharCode(65 + idx)}
+                  </span>
+                  <span className="text-sm font-medium pt-0.5">{opt}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Bottom Navigation Buttons */}
+          <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+            <button
+              id="prev-question-btn"
+              disabled={currentQuestionIndex === 0}
+              onClick={() => setCurrentQuestionIndex((prev) => prev - 1)}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition disabled:opacity-30 disabled:pointer-events-none"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Câu trước
+            </button>
+
+            <button
+              id="submit-exam-trigger"
+              onClick={submitExam}
+              className="px-6 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-bold rounded-lg shadow transition"
+            >
+              Nộp bài thi
+            </button>
+
+            <button
+              id="next-question-btn"
+              disabled={currentQuestionIndex === questions.length - 1}
+              onClick={() => setCurrentQuestionIndex((prev) => prev + 1)}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition disabled:opacity-30 disabled:pointer-events-none"
+            >
+              Câu kế tiếp
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Post Exam Review and Detailed Performance Screen */}
+      {examStatus === "completed" && score && (
+        <div className="space-y-6" id="stage-completed">
+          {/* Result Header Card */}
+          <div className={`text-center py-6 px-4 border rounded-xl ${score.passed ? "bg-emerald-950/20 border-emerald-800 text-emerald-100" : "bg-rose-950/20 border-rose-800 text-rose-100"}`} id="exam-score-panel">
+            <div className="flex justify-center mb-3">
+              {score.passed ? (
+                <CheckCircle2 className="w-16 h-16 text-emerald-400" />
+              ) : (
+                <XCircle className="w-16 h-16 text-rose-400" />
+              )}
+            </div>
+            <h2 className="text-3xl font-black font-display text-white">
+              {score.passed ? "ĐẠT CHỨNG CHỈ (PASSED)" : "CHƯA ĐẠT CHỨNG CHỈ"}
             </h2>
-            <p className="text-sm opacity-85 text-white/90">
-              Mã đề: <span className="font-mono font-bold">{exam.title}</span>
+            <p className="text-sm mt-1 opacity-80">
+              {score.passed ? "Chúc mừng bạn đã hoàn thiện bài kiểm tra xuất sắc!" : "Cố ý ôn tập kỹ hơn nội dung và rèn luyện tiếp nhé!"}
             </p>
+
+            <div className="grid grid-cols-3 gap-2 mt-6 max-w-md mx-auto text-center">
+              <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800">
+                <span className="text-xs text-slate-400 block">Điểm số chuẩn</span>
+                <span className="text-2xl font-extrabold text-white">{score.score1000}</span>
+                <span className="text-xs text-slate-500 block">trên 1000</span>
+              </div>
+              <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800">
+                <span className="text-xs text-slate-400 block">Đúng / Tổng số</span>
+                <span className="text-2xl font-extrabold text-white">{score.correct} / {score.total}</span>
+                <span className="text-xs text-slate-500 block">câu hỏi</span>
+              </div>
+              <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800 font-semibold flex flex-col justify-center items-center">
+                <span className="text-xs text-slate-400 block">Tỷ lệ chính xác</span>
+                <span className="text-xl font-extrabold text-white">{Math.round((score.correct / score.total) * 100)}%</span>
+              </div>
+            </div>
           </div>
 
-          <div className="shrink-0 flex flex-col items-center justify-center p-6 bg-white/10 rounded-2xl border border-white/10 text-center min-w-32">
-            <span className="text-sm font-bold opacity-80 uppercase text-white/90">Điểm của bạn</span>
-            <span className="text-5xl font-black">{resultSummary?.score}%</span>
-            <span className="text-[10px] text-indigo-100 font-bold mt-1">Yêu cầu tối thiểu: {exam.passingScorePercent}%</span>
-          </div>
-        </div>
-
-        {/* CORE STATS BLOCK GIVING Swiss precision visual style */}
-        <div className="p-6 md:p-8 grid grid-cols-1 sm:grid-cols-3 gap-6 bg-slate-50 border-b border-gray-200 text-center">
-          <div className="bg-white p-4 rounded-xl border border-gray-200/60 shadow-xs flex flex-col items-center justify-center" id="result-stat-answered">
-            <span className="text-xs text-gray-400 font-bold uppercase tracking-wider">Số câu chính xác</span>
-            <span className="text-2xl font-black text-gray-800 mt-1">
-              {resultSummary?.correctCount} / {resultSummary?.totalCount}
-            </span>
-          </div>
-          
-          <div className="bg-white p-4 rounded-xl border border-gray-200/60 shadow-xs flex flex-col items-center justify-center" id="result-stat-time">
-            <span className="text-xs text-gray-400 font-bold uppercase tracking-wider">Thời gian hoàn thành</span>
-            <span className="text-2xl font-black text-gray-800 mt-1">
-              {formatTime(resultSummary?.timeSpentSeconds || 0)}
-            </span>
+          <div className="flex gap-4 justify-between items-center bg-slate-950/50 p-4 border border-slate-800 rounded-lg">
+            <button
+              id="back-home-or-dash"
+              onClick={onClose}
+              className="px-5 py-2 hover:bg-slate-800 text-slate-300 font-medium rounded-lg text-sm border border-slate-800"
+            >
+              Thoát phòng thi
+            </button>
+            <button
+              id="exam-retrial"
+              onClick={handleStartExam}
+              className="flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow transition"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Thi lại bài này
+            </button>
           </div>
 
-          <div className="bg-white p-4 rounded-xl border border-gray-200/60 shadow-xs flex flex-col items-center justify-center animate-pulse" id="result-stat-safety">
-            <span className="text-xs text-gray-400 font-bold uppercase tracking-wider font-mono text-rose-500">Giám thị chấm kết luận</span>
-            <span className="text-sm font-black text-emerald-600 mt-1">
-              AN TOÀN ✓ {cheatWarnings > 0 ? `(Rời focus: ${cheatWarnings} lần)` : "KHÔNG GIAN LẬN"}
-            </span>
-          </div>
-        </div>
-
-        {/* DETAILED DIAGNOSTICS PILLS */}
-        <div className="p-6 md:p-8 space-y-6">
-          <div className="space-y-4">
-            <h3 className="text-lg font-black text-gray-800 flex items-center gap-1">
-              <BarChart3 className="h-5 w-5 text-indigo-600" />
-              Đánh giá phản hồi kỹ năng học tập chuyên sâu:
+          {/* Detailed Question Review List */}
+          <div className="space-y-4" id="completed-review-section">
+            <h3 className="text-xl font-bold text-white font-display border-b border-slate-800 pb-2">
+              Xem lại từng câu của bài thi
             </h3>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Object.keys(resultSummary?.skillRatings || {}).map((skill) => {
-                const item = resultSummary!.skillRatings[skill];
-                const pct = Math.round((item.correct / item.total) * 100);
-
-                let progressColor = "bg-red-500";
-                if (pct >= 80) progressColor = "bg-emerald-500";
-                else if (pct >= 50) progressColor = "bg-amber-500";
-
-                return (
-                  <div key={skill} className="p-4 border border-gray-200 rounded-xl bg-white space-y-2">
-                    <div className="flex items-center justify-between text-xs font-bold">
-                      <span className="text-gray-700">{skill}</span>
-                      <span className="text-gray-900">{pct}% ({item.correct}/{item.total} câu)</span>
-                    </div>
-
-                    <div className="w-full bg-gray-100 h-2.5 rounded-full overflow-hidden">
-                      <div className={`${progressColor} h-full transition-all`} style={{ width: `${pct}%` }} />
-                    </div>
-
-                    {pct < 60 && (
-                      <p className="text-[10px] text-rose-600 font-semibold" id={`weakness-suggestion-${skill}`}>
-                        📚 Trọng tâm còn yếu! Khuyên học viên xem lại tài liệu chuyên đề liên đới.
-                      </p>
-                    )}
+            {questions.map((q, idx) => {
+              const userAns = selectedAnswers[q.id];
+              const isCorrect = userAns === q.correctIndex;
+              return (
+                <div key={q.id} className={`p-5 rounded-xl border ${isCorrect ? "bg-emerald-950/10 border-emerald-900/60" : userAns === undefined ? "bg-slate-900/40 border-slate-800" : "bg-rose-950/10 border-rose-900/60"}`}>
+                  <div className="flex items-start justify-between gap-4 mb-2">
+                    <span className="text-xs font-bold px-2 py-0.5 bg-slate-800 text-indigo-300 rounded uppercase">
+                      Câu {idx + 1}: {q.topic}
+                    </span>
+                    <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${isCorrect ? "bg-emerald-500/10 text-emerald-400" : userAns === undefined ? "bg-slate-800 text-slate-400" : "bg-rose-500/10 text-rose-400"}`}>
+                      {isCorrect ? "Đúng" : userAns === undefined ? "Chưa trả lời" : "Sai"}
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
 
-          {/* BACK TO DASHBOARD NAVIGATION BAR */}
-          <div className="pt-6 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <button
-              id="retake-exam-simulation-btn"
-              type="button"
-              onClick={() => {
-                setIsSubmitted(false);
-                setCurrentIndex(0);
-                setAnswers({});
-                setFlaggedQuestions({});
-                setTimeLeftSeconds(exam.durationMinutes * 60);
-                setCheatWarnings(0);
-              }}
-              className="w-full sm:w-auto px-6 py-3 bg-slate-100 text-gray-600 font-bold hover:bg-slate-200 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <RefreshCw className="h-4 w-4" /> Làm lại bài thi này
-            </button>
+                  <p className="text-sm font-semibold text-white mb-3">{q.questionText}</p>
 
-            <button
-              id="back-home-results-btn"
-              type="button"
-              onClick={onBackToHome}
-              className="w-full sm:w-auto px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
-            >
-              Quay lại Bảng điều khiển (Dashboard)
-            </button>
+                  <div className="space-y-1.5 text-xs">
+                    {q.options.map((opt, oIdx) => {
+                      const isCorrectOpt = oIdx === q.correctIndex;
+                      const isUserOpt = oIdx === userAns;
+                      return (
+                        <div
+                          key={oIdx}
+                          className={`flex items-center gap-2 p-2 rounded ${isCorrectOpt ? "bg-emerald-500/10 text-emerald-300 border border-emerald-900/30" : isUserOpt ? "bg-rose-500/10 text-rose-300 border border-rose-900/30" : "text-slate-400"}`}
+                        >
+                          <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${isCorrectOpt ? "bg-emerald-500 text-white" : isUserOpt ? "bg-rose-500 text-white" : "bg-slate-800 text-slate-500"}`}>
+                            {String.fromCharCode(65 + oIdx)}
+                          </span>
+                          <span>{opt}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Explanation card */}
+                  <div className="mt-4 pt-3 border-t border-slate-800 text-xs text-slate-400 leading-relaxed bg-slate-950/20 p-3 rounded border border-slate-800/40">
+                    <strong className="text-slate-300">Giải thích đáp án đúng:</strong> {q.explanation}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

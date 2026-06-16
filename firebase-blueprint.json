@@ -1,0 +1,177 @@
+{
+  "entities": {
+    "UserProgress": {
+      "title": "User Progressive Profile",
+      "description": "Profile data and progress tracking for student, teacher, or admin users.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The unique Firebase UID of the user."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["student", "teacher", "admin"],
+          "description": "The current role of the user."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the student or teacher."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Registered email address."
+        },
+        "classId": {
+          "type": "string",
+          "description": "Optional classroom code or ID that the user coordinates or belongs to."
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Epoch timestamp of when the account was registered."
+        }
+      },
+      "required": ["userId", "role", "displayName", "email", "createdAt"]
+    },
+    "Classroom": {
+      "title": "Classroom",
+      "description": "A group created by a teacher to coordinate and track multiple students.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The Firestore document ID."
+        },
+        "name": {
+          "type": "string",
+          "description": "The custom name chosen by the teacher."
+        },
+        "code": {
+          "type": "string",
+          "description": "A unique 6-character code used by students to register into this class."
+        },
+        "teacherId": {
+          "type": "string",
+          "description": "The UID of the teacher presiding over the classroom."
+        },
+        "teacherName": {
+          "type": "string",
+          "description": "The current display name of the teacher."
+        },
+        "studentIds": {
+          "type": "array",
+          "description": "Array list of student UIDs registered/joined in this classroom."
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Epoch timestamp of when the classroom was initiated."
+        }
+      },
+      "required": ["name", "code", "teacherId", "teacherName", "studentIds", "createdAt"]
+    },
+    "ExamRecord": {
+      "title": "Exam Score Record",
+      "description": "Performance tracking database from simulation exams.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The database document ID."
+        },
+        "userId": {
+          "type": "string",
+          "description": "The candidate's UID."
+        },
+        "studentName": {
+          "type": "string",
+          "description": "The display name of the candidate."
+        },
+        "module": {
+          "type": "string",
+          "enum": ["cf", "ka", "lo"],
+          "description": "The abbreviated IC3 GS6 module identifier."
+        },
+        "score": {
+          "type": "integer",
+          "description": "The scaled score achieved (out of 1000)."
+        },
+        "correctCount": {
+          "type": "integer",
+          "description": "Quantity of correct answers in the simulator exam."
+        },
+        "totalQuestions": {
+          "type": "integer",
+          "description": "Maximum question count for the module."
+        },
+        "timeSpent": {
+          "type": "integer",
+          "description": "Time spent by the candidate (seconds)."
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "Whether the exam scaled score was above standard threshold (700)."
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Timestamp of the test completion."
+        }
+      },
+      "required": ["userId", "studentName", "module", "score", "correctCount", "totalQuestions", "timeSpent", "passed", "createdAt"]
+    },
+    "UploadedDocument": {
+      "title": "Uploaded Document/File",
+      "description": "Metadata for files or documents uploaded by a user for study/reference purposes.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The document identifier."
+        },
+        "userId": {
+          "type": "string",
+          "description": "The UID of the owning user."
+        },
+        "userEmail": {
+          "type": "string",
+          "description": "Email of the owning user."
+        },
+        "name": {
+          "type": "string",
+          "description": "Original file name."
+        },
+        "size": {
+          "type": "integer",
+          "description": "The size of the uploaded document in bytes."
+        },
+        "type": {
+          "type": "string",
+          "description": "The format representation or suffix."
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Timestamp when the upload completed."
+        }
+      },
+      "required": ["userId", "userEmail", "name", "size", "type", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProgress",
+      "description": "User profiles indexed by their Firebase Authentication UID."
+    },
+    "/classrooms/{classroomId}": {
+      "schema": "Classroom",
+      "description": "Prescribed classrooms initiated by teachers."
+    },
+    "/exams/{examId}": {
+      "schema": "ExamRecord",
+      "description": "Archived exam logs completed by students or candidates."
+    },
+    "/documents/{documentId}": {
+      "schema": "UploadedDocument",
+      "description": "Metadata store for files uploaded by candidates or teachers for reference or certification verification."
+    }
+  }
+}

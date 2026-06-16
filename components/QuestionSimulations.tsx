@@ -1,7 +1,32 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Question } from "@/lib/ic3data";
+export interface Question {
+  id: string;
+  type: string;
+  module?: "cf" | "ka" | "lo";
+  topic?: string;
+  questionText: string;
+  options?: string[];
+  correctIndex?: number;
+  explanation?: string;
+  correctSingle?: string;
+  correctMultiple?: string[];
+  correctTrueFalse?: Record<string, boolean>;
+  pairs?: Array<{ leftId: string; leftText: string; rightId: string; rightText: string }>;
+  correctAnswers?: Record<string, string>;
+  items?: Array<{ id: string; text: string; category?: string }>;
+  categories?: string[];
+  correctMatching?: Record<string, string>;
+  imageUrl?: string;
+  hotspots?: Array<{ id: string; name: string; x: number; y: number; width: number; height: number; [key: string]: any }>;
+  correctHotspotId?: string;
+  steps?: string[];
+  correctSequence?: string[];
+  videoUrl?: string;
+  [key: string]: any;
+}
+
 import { Check, X, MoveHorizontal, MapPin, Play, Pause, RotateCw, FolderPlus, FileText, ChevronRight, HelpCircle } from "lucide-react";
 
 interface QuestionSimulationProps {
@@ -274,8 +299,8 @@ function MatchingSim({ question, currentAnswer = {}, onChangeAnswer, showFeedbac
   const pairs = question.matchingPairs || [];
   
   // Static lists for left side and right side options
-  const lefts = pairs.map((p) => p.left);
-  const rights = Array.from(new Set(pairs.map((p) => p.right)));
+  const lefts = pairs.map((p) => p.left) as any[];
+  const rights = Array.from(new Set(pairs.map((p) => p.right))) as any[];
 
   const handleSelection = (left: string, rightVal: string) => {
     if (showFeedback) return;

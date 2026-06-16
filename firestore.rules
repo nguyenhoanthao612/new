@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global helper: checks if the requester is the unique Admin
+    function isAdmin() {
+      return request.auth != null && request.auth.uid == "Mx33zQx6FVP9L7lThJ7YDue9FUI2";
+    }
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Administrative collections: only read and write by Admin
+    match /users/{userId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /classrooms/{classroomId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /documents/{documentId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /exams/{examId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Public collections (i.e. questions)
+    match /questions/{questionId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

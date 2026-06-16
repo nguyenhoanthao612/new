@@ -1,355 +1,396 @@
 "use client";
 
 import React, { useState } from "react";
-import { IC3Provider, useIC3 } from "@/lib/ic3store";
-import UserDashboard from "@/components/UserDashboard";
-import PracticeModule from "@/components/PracticeModule";
-import ExamSimulator from "@/components/ExamSimulator";
-import TeacherConsole from "@/components/TeacherConsole";
-import AdminPanel from "@/components/AdminPanel";
-import { BookOpen, Trophy, ShieldCheck, Cpu, MessageSquare, Compass, Terminal, FileText, LayoutDashboard, Database, UserCheck, Star, Users, Flame, BookMarked, Sun, Moon } from "lucide-react";
+import { IC3Provider, useIC3 } from "../lib/ic3store";
+import { IC3_MODULES } from "../lib/ic3data";
+import AuthViews from "../components/AuthViews";
+import PracticeModule from "../components/PracticeModule";
+import ExamSimulator from "../components/ExamSimulator";
+import Leaderboard from "../components/Leaderboard";
+import ExamPrepList from "../components/ExamPrepList";
+import AdminPanel from "../components/AdminPanel";
+import { 
+  Menu, 
+  X, 
+  Award, 
+  BookOpen, 
+  Trophy, 
+  Play, 
+  CheckCircle2, 
+  ArrowRight, 
+  LogOut, 
+  ShieldCheck, 
+  Lock
+} from "lucide-react";
 
 function HomeContent() {
-  const { activeRole, setActiveRole, currentUser, lessons, exams } = useIC3();
+  const { firebaseUser, activeRole, loading, logout } = useIC3();
 
-  // Active navigation section
-  const [activeScreen, setActiveScreen] = useState<"homepage" | "dashboard" | "practice" | "teacher" | "admin">("homepage");
-  const [activeExamId, setActiveExamId] = useState<string | null>(null);
+  // Screen management flow states
+  const [activeScreen, setActiveScreen] = useState<"homepage" | "practice" | "exam" | "leaderboard" | "admin">("homepage");
+  const [authFlowState, setAuthFlowState] = useState<"login" | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Dynamic start actions
-  const handleStartPractice = () => {
-    setActiveScreen("practice");
-  };
+  // Active exam tracking
+  const [activeExamModule, setActiveExamModule] = useState<"cf" | "ka" | "lo" | null>(null);
 
-  const handleStartExam = (examId: string) => {
-    setActiveExamId(examId);
-    setActiveScreen("homepage"); // Bypass dashboard, loader handles it
-  };
+  // Overriding check for Admin session
+  let resolvedScreen = activeScreen;
+  if (firebaseUser && activeRole === "admin") {
+    // If Admin is logged in, they can access the full admin dashboard or browse modules
+    if (activeScreen !== "admin" && activeScreen !== "homepage" && activeScreen !== "practice" && activeScreen !== "exam" && activeScreen !== "leaderboard") {
+      resolvedScreen = "admin";
+    }
+  } else {
+    // Guest user has no access to admin
+    if (activeScreen === "admin") {
+      resolvedScreen = "homepage";
+    }
+  }
 
-  const handleCompleteExam = () => {
-    setActiveExamId(null);
-    setActiveScreen("dashboard");
+  const handleStartExam = (modId: "cf" | "ka" | "lo") => {
+    setActiveExamModule(modId);
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased flex flex-col justify-between">
-      <div>
-        {/* 1. TOP INTERACTIVE TESTING BAR (Evaluating user roles) */}
-        <div className="bg-slate-900 text-slate-200 py-1 px-4 flex flex-wrap items-center justify-between text-xs font-semibold gap-3 border-b border-slate-800 shadow-inner">
-          <div className="flex items-center space-x-2">
-            <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-            <span className="text-slate-300 font-bold tracking-tight text-[11px]">MÔI TRƯỜNG GIẢ LẬP TRỰC QUAN:</span>
-            <span className="text-[10px] text-slate-400 font-mono">Đổi vai trò để chấm điểm các góc nhìn giao diện khác nhau</span>
-          </div>
-
-          <div className="flex items-center space-x-2" id="role-selector-utility">
-            <button
-              id="role-student-btn"
-              type="button"
-              onClick={() => {
-                setActiveRole("student");
-                setActiveScreen("homepage");
-                setActiveExamId(null);
-              }}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-bold tracking-tight transition duration-150 cursor-pointer ${
-                activeRole === "student"
-                  ? "bg-blue-600 text-white shadow-sm"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Học viên (Student)
-            </button>
-            
-            <button
-              id="role-teacher-btn"
-              type="button"
-              onClick={() => {
-                setActiveRole("teacher");
-                setActiveScreen("teacher");
-                setActiveExamId(null);
-              }}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-bold tracking-tight transition duration-150 cursor-pointer ${
-                activeRole === "teacher"
-                  ? "bg-amber-600 text-white shadow-sm"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Giảng viên (Teacher)
-            </button>
-
-            <button
-              id="role-admin-btn"
-              type="button"
-              onClick={() => {
-                setActiveRole("admin");
-                setActiveScreen("admin");
-                setActiveExamId(null);
-              }}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-bold tracking-tight transition duration-150 cursor-pointer ${
-                activeRole === "admin"
-                  ? "bg-purple-600 text-white shadow-sm"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Quản trị viên (Admin)
-            </button>
-          </div>
-        </div>
-
-        {/* 2. SYSTEM MAIN HEADER NAVIGATION BAR */}
-        <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs px-8 py-3 flex items-center justify-between">
-          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => { setActiveScreen("homepage"); setActiveExamId(null); }}>
-            <div className="h-8 w-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold tracking-wider shadow-sm">
-              I3
+    <div className="flex flex-col min-h-screen bg-slate-50 text-slate-900" id="global-layout-root-container">
+      {/* Sticky top header bar */}
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 shadow-sm" id="main-navigation-header">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          
+          {/* Platform Identity */}
+          <button 
+            id="nav-logo"
+            onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); setActiveExamModule(null); }}
+            className="flex items-center gap-2.5 text-left bg-transparent border-none cursor-pointer"
+          >
+            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-500/10 shrink-0">
+              <Award className="w-5.5 h-5.5" />
             </div>
             <div>
-              <h1 className="text-sm font-bold text-slate-800 tracking-tight leading-none">IC3 MasterPro</h1>
-              <p className="text-[9px] text-slate-400 font-semibold tracking-wider block mt-1 uppercase">Certiport Standard 2026</p>
+              <span className="font-extrabold font-display text-sm block leading-none tracking-tight text-slate-900">IC3 MASTER</span>
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider font-mono">GS6 Prep Station</span>
             </div>
-          </div>
+          </button>
 
-          {/* Dynamic page routes changer */}
-          {activeExamId === null && (
-            <nav className="hidden md:flex items-center space-x-6 text-xs font-semibold text-slate-500">
+          {/* Navigational Links */}
+          <nav className="hidden md:flex items-center gap-6 text-xs font-bold text-slate-600" id="desktop-links-nav">
+            <button
+              id="nav-link-intro"
+              onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); setActiveExamModule(null); }}
+              className={`hover:text-indigo-600 transition cursor-pointer py-1.5 ${resolvedScreen === "homepage" && !authFlowState ? "text-indigo-600 border-b-2 border-indigo-600 font-extrabold" : ""}`}
+            >
+              Trang giới thiệu
+            </button>
+
+            <button
+              id="nav-link-practice"
+              onClick={() => { setActiveScreen("practice"); setAuthFlowState(null); setActiveExamModule(null); }}
+              className={`hover:text-indigo-600 transition cursor-pointer py-1.5 ${resolvedScreen === "practice" && !authFlowState ? "text-indigo-600 border-b-2 border-indigo-600 font-extrabold" : ""}`}
+            >
+              Luyện tập tự do
+            </button>
+
+            <button
+              id="nav-link-exams"
+              onClick={() => { setActiveScreen("exam"); setAuthFlowState(null); setActiveExamModule(null); }}
+              className={`hover:text-indigo-600 transition cursor-pointer py-1.5 ${resolvedScreen === "exam" && !authFlowState ? "text-indigo-600 border-b-2 border-indigo-600 font-extrabold" : ""}`}
+            >
+              Thi thử IC3
+            </button>
+
+            <button
+              id="nav-link-leaderboard"
+              onClick={() => { setActiveScreen("leaderboard"); setAuthFlowState(null); setActiveExamModule(null); }}
+              className={`hover:text-indigo-600 transition cursor-pointer py-1.5 ${resolvedScreen === "leaderboard" && !authFlowState ? "text-indigo-600 border-b-2 border-indigo-600 font-extrabold" : ""}`}
+            >
+              Bảng xếp hạng
+            </button>
+
+            {firebaseUser && activeRole === "admin" && (
               <button
-                id="nav-home"
-                onClick={() => setActiveScreen("homepage")}
-                className={`hover:text-blue-600 transition cursor-pointer ${activeScreen === "homepage" ? "text-blue-600 font-bold border-b-2 border-blue-600 pb-1" : ""}`}
+                id="nav-link-admin"
+                onClick={() => { setActiveScreen("admin"); setAuthFlowState(null); setActiveExamModule(null); }}
+                className={`text-rose-600 hover:text-rose-700 transition cursor-pointer py-1.5 flex items-center gap-1 ${resolvedScreen === "admin" && !authFlowState ? "border-b-2 border-rose-600 font-extrabold" : ""}`}
               >
-                Trang giới thiệu
+                <ShieldCheck className="w-4 h-4" />
+                Quản trị hệ thống
               </button>
-              
-              {activeRole === "student" && (
-                <>
-                  <button
-                    id="nav-student-dashboard"
-                    onClick={() => setActiveScreen("dashboard")}
-                    className={`hover:text-blue-600 transition cursor-pointer ${activeScreen === "dashboard" ? "text-blue-600 font-bold border-b-2 border-blue-600 pb-1" : ""}`}
-                  >
-                    Góc Học tập & Thi thử
-                  </button>
-                  <button
-                    id="nav-student-practice"
-                    onClick={() => setActiveScreen("practice")}
-                    className={`hover:text-blue-600 transition cursor-pointer ${activeScreen === "practice" ? "text-blue-600 font-bold border-b-2 border-blue-600 pb-1" : ""}`}
-                  >
-                    Luyện tập tự do
-                  </button>
-                </>
-              )}
+            )}
+          </nav>
 
-              {activeRole === "teacher" && (
+          {/* Admin Avatar & Logout Indicator */}
+          <div className="hidden md:flex items-center gap-4 shrink-0" id="desktop-profile-section">
+            {loading ? (
+              <span className="text-xs text-slate-400 font-medium">...</span>
+            ) : firebaseUser && activeRole === "admin" ? (
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 p-1 px-2.5 rounded-xl border border-slate-200 bg-slate-50">
+                  <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center font-bold text-white text-[11px] shadow-sm">
+                    A
+                  </div>
+                  <div className="text-left">
+                    <span className="text-[10px] font-black text-slate-800 block">ADMIN</span>
+                  </div>
+                </div>
                 <button
-                  id="nav-teacher-console"
-                  onClick={() => setActiveScreen("teacher")}
-                  className={`hover:text-amber-600 transition cursor-pointer ${activeScreen === "teacher" ? "text-amber-600 font-bold border-b-2 border-amber-600 pb-1" : ""}`}
+                  onClick={logout}
+                  className="p-2 cursor-pointer bg-slate-50 hover:bg-rose-50 hover:text-rose-600 border border-slate-200 hover:border-rose-200 rounded-lg text-slate-600 transition"
+                  title="Đăng xuất quản trị"
+                  id="btn-admin-logout"
                 >
-                  Hội đồng Giảng dạy
+                  <LogOut className="w-4 h-4" />
                 </button>
-              )}
-
-              {activeRole === "admin" && (
-                <button
-                  id="nav-admin-panel"
-                  onClick={() => setActiveScreen("admin")}
-                  className={`hover:text-purple-600 transition cursor-pointer ${activeScreen === "admin" ? "text-purple-600 font-bold border-b-2 border-purple-600 pb-1" : ""}`}
-                >
-                  Hệ thống Quản trị
-                </button>
-              )}
-            </nav>
-          )}
-
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center gap-2 px-2.5 py-0.5 bg-green-50 text-green-700 border border-green-150 rounded-full text-[10px] font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-              System Online
-            </div>
-            <div className="hidden sm:block text-right">
-              <p className="text-xs font-bold text-slate-800 leading-tight">nguyenhoanthao612</p>
-              <span className="text-[10px] text-slate-400 font-mono">Vai trò: <span className="font-bold text-blue-600 bg-blue-50 px-1 py-0.2 rounded-sm">{activeRole}</span></span>
-            </div>
+              </div>
+            ) : null}
           </div>
-        </header>
 
-        {/* 3. DYNAMIC CONTENT SWITCHES */}
-        <main className="px-8 py-6" id="primary-applet-stage">
-          {/* EXAM ROUTE WORKSPACE LOADER */}
-          {activeExamId !== null ? (
-            <ExamSimulator examId={activeExamId} onBackToHome={handleCompleteExam} />
-          ) : (
-            <>
-              {/* SCREEN 1: HOMEPAGE INTRO & METRICS PORTAL */}
-              {activeScreen === "homepage" && (
-                <div className="space-y-6 max-w-6xl mx-auto animate-fade-in" id="intro-cert-room">
-                  {/* HERO BANNER SECTION */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 md:p-10 text-white flex flex-col lg:flex-row items-center justify-between text-left gap-8 shadow-sm">
-                    <div className="space-y-4 max-w-xl">
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-300 text-[10px] font-bold tracking-wider uppercase gap-1.5 animate-pulse">
-                        <Flame className="h-4 w-4" /> Bản Cập Nhật Certiport 2026 Mới Nhất
-                      </span>
-                      <h2 className="text-2xl md:text-3xl font-bold text-white tracking-tight leading-tight">
-                        Luyện Thi Chứng Chỉ IC3 Chuyên Sâu, Sát Đề Thực Tế
-                      </h2>
-                      <p className="text-xs md:text-sm text-slate-300 leading-relaxed font-normal">
-                        Nền tảng học hỏi kiến thức chuyên đề, thực hành tương tác chuyên sâu bao gồm đầy đủ 8 dạng câu hỏi, mô phỏng thao tác Windows & Office cùng AI trợ giảng khoa học.
-                      </p>
+          {/* Mobile navigation menu button */}
+          <div className="flex md:hidden" id="mobile-hamburger">
+            <button
+              id="mobile-hamb-trigger"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="text-slate-600 hover:text-slate-900 focus:outline-none p-1.5"
+            >
+              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+          </div>
 
-                      <div className="pt-2 flex flex-wrap gap-4">
-                        {activeRole === "student" ? (
-                          <button
-                            id="hero-dashboard-start-btn"
-                            type="button"
-                            onClick={() => setActiveScreen("dashboard")}
-                            className="py-2.5 px-6 bg-blue-600 text-white rounded font-bold hover:bg-blue-700 transition text-xs cursor-pointer shadow-sm outline-none"
-                          >
-                            Bắt đầu học ngay →
-                          </button>
-                        ) : (
-                          <p className="text-xs bg-slate-800 p-2.5 border border-slate-705 border-slate-700 rounded font-semibold text-slate-300">
-                            * Bạn đang truy cập dưới quyền quản lý <strong>{activeRole}</strong>. Chọn vai trò <strong>Student</strong> nếu muốn bắt đầu luyện đề.
-                          </p>
-                        )}
-                        
-                        <button
-                          id="hero-practice-start-btn"
-                          type="button"
-                          onClick={handleStartPractice}
-                          className="py-2.5 px-5 border border-slate-700 text-slate-300 rounded font-bold hover:bg-white/5 transition text-xs cursor-pointer"
-                        >
-                          Đề ôn tập tự do
-                        </button>
-                      </div>
-                    </div>
+        </div>
 
-                    {/* Visual components representation */}
-                    <div className="shrink-0 w-full lg:w-96 grid grid-cols-2 gap-3">
-                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 border-slate-800 space-y-1.5">
-                        <Cpu className="h-5 w-5 text-blue-400" />
-                        <h4 className="font-bold text-xs text-slate-200">Computing Fundamentals</h4>
-                        <p className="text-[10px] text-slate-400">Phần cứng, hệ điều hành, bảo mật..</p>
-                      </div>
+        {/* Mobile Navigation Panel */}
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t border-slate-100 bg-white p-4 space-y-3 shadow-inner" id="mobile-links-panel">
+            <button
+              id="m-nav-intro"
+              onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+              className="w-full text-left py-2 font-bold text-xs text-slate-700 block hover:text-indigo-600"
+            >
+              Trang giới thiệu
+            </button>
+
+            <button
+              id="m-nav-practice"
+              onClick={() => { setActiveScreen("practice"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+              className="w-full text-left py-2 font-bold text-xs text-slate-700 block hover:text-indigo-600"
+            >
+              Luyện tập tự do
+            </button>
+
+            <button
+              id="m-nav-exams"
+              onClick={() => { setActiveScreen("exam"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+              className="w-full text-left py-2 font-bold text-xs text-slate-700 block hover:text-indigo-600"
+            >
+              Thi thử IC3
+            </button>
+
+            <button
+              id="m-nav-leaderboard"
+              onClick={() => { setActiveScreen("leaderboard"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+              className="w-full text-left py-2 font-bold text-xs text-slate-700 block hover:text-indigo-600"
+            >
+              Bảng xếp hạng
+            </button>
+
+            {firebaseUser && activeRole === "admin" && (
+              <button
+                id="m-nav-admin"
+                onClick={() => { setActiveScreen("admin"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+                className="w-full text-left py-2 font-bold text-xs text-rose-600 block flex items-center gap-1.5"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Quản trị hệ thống
+              </button>
+            )}
+
+            {firebaseUser && activeRole === "admin" && (
+              <button
+                id="m-nav-logout"
+                onClick={() => { logout(); setMobileMenuOpen(false); }}
+                className="w-full text-left py-2 text-xs font-bold text-slate-500 hover:text-rose-600 border-t border-slate-100"
+              >
+                Đăng xuất Admin
+              </button>
+            )}
+          </div>
+        )}
+      </header>
+
+      {/* Primary Application Stage */}
+      <main className="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8" id="core-application-body">
+        
+        {/* Loading overlay panel */}
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center" id="central-app-loader">
+            <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+            <p className="mt-4 text-[10px] font-bold font-mono uppercase tracking-wider text-slate-400">Đang đồng bộ dữ liệu chuẩn quốc tế...</p>
+          </div>
+        ) : authFlowState === "login" ? (
+          <div className="py-6 animate-fade-in" id="auth-flow-overlay">
+            <AuthViews flow="login" onSwitchFlow={(state) => setAuthFlowState(state ? "login" : null)} />
+          </div>
+        ) : activeExamModule ? (
+          <div className="animate-fade-in" id="active-exam-room-layer">
+            <ExamSimulator module={activeExamModule} onClose={() => setActiveExamModule(null)} />
+          </div>
+        ) : (
+          <div className="animate-fade-in" id="standard-app-layer">
+            
+            {/* 1. HOMEPAGE INTRO LANDER */}
+            {resolvedScreen === "homepage" && (
+              <div className="space-y-12 max-w-5xl mx-auto" id="landing-stage">
+                
+                {/* Visual Lander Hero Banner */}
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 md:p-12 text-white flex flex-col lg:flex-row items-center justify-between text-left gap-10 shadow-lg relative overflow-hidden" id="landing-hero-card">
+                  
+                  {/* Subtle decorative background gradient */}
+                  <div className="absolute -right-24 -top-24 w-80 h-80 bg-indigo-600/10 blur-3xl rounded-full" />
+                  
+                  <div className="space-y-5 relative z-10" id="landing-hero-text">
+                    <span className="bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 font-bold text-[10px] px-3 py-1.5 rounded-full uppercase tracking-wider font-mono">
+                      Khởi động ôn luyện chứng chỉ quốc tế GS6
+                    </span>
+                    <h1 className="text-3xl md:text-5.5xl font-black font-display tracking-tight leading-none text-white">
+                      Bứt Phá Kỹ Năng Số Với <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-sky-400">IC3 Master</span>
+                    </h1>
+                    <p className="text-slate-400 text-xs md:text-sm max-w-xl leading-relaxed">
+                      Luyện thi chuẩn máy tính quốc tế GS6. Trải nghiệm trọn vẹn cả 3 học phần: Máy tính căn bản, Các ứng dụng chủ chốt, và Cuộc sống trực tuyến với phòng thi mô phỏng thật 100% tài nguyên miễn phí.
+                    </p>
+
+                    <div className="flex flex-wrap gap-3.5 pt-2" id="landing-hero-actions">
+                      <button
+                        id="hero-go-exams-btn"
+                        onClick={() => setActiveScreen("exam")}
+                        className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl shadow-md hover:shadow-lg transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        Thi Thử IC3 Ngay
+                        <Play className="w-3 px-0.5 h-3 fill-white" />
+                      </button>
                       
-                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1.5">
-                        <BookMarked className="h-5 w-5 text-emerald-400" />
-                        <h4 className="font-bold text-xs text-slate-200">Key Applications</h4>
-                        <p className="text-[10px] text-slate-400">Word, Excel, PowerPoint..</p>
-                      </div>
-
-                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1.5 col-span-2">
-                        <Compass className="h-5 w-5 text-amber-400" />
-                        <h4 className="font-bold text-xs text-slate-200">Living Online</h4>
-                        <p className="text-[10px] text-slate-400">Internet, Mạng xã hội, kỹ năng Email chuyên nghiệp và an toàn thông tin số..</p>
-                      </div>
+                      <button
+                        id="hero-free-btn"
+                        onClick={() => setActiveScreen("practice")}
+                        className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold border border-slate-700 rounded-xl text-xs transition cursor-pointer"
+                      >
+                        Luyện Tập Tự Do
+                      </button>
                     </div>
                   </div>
 
-                  {/* SYSTEM HIGHLIGHT STATISTICS */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-5 bg-white border border-slate-200 rounded-xl shadow-xs text-center">
-                    <div className="space-y-1 border-r border-slate-100 last:border-0">
-                      <span className="text-2xl font-bold text-slate-900 block">08</span>
-                      <p className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">DẠNG CÂU HỎI MÔ PHỎNG</p>
-                    </div>
-                    <div className="space-y-1 border-r border-slate-100 last:border-0 pl-2">
-                      <span className="text-2xl font-bold text-blue-600 block">100%</span>
-                      <p className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">CHUNG THỰC TẾ CERTIPORT</p>
-                    </div>
-                    <div className="space-y-1 border-r border-slate-100 last:border-0 pl-2">
-                      <span className="text-2xl font-bold text-emerald-600 block">94.8%</span>
-                      <p className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">TỶ LỆ LUYỆN ĐẬU THỰC</p>
-                    </div>
-                    <div className="space-y-1 pl-2">
-                      <span className="text-2xl font-bold text-purple-600 block">Gemini</span>
-                      <p className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">TRỢ GIẢNG AI EXPLAINER</p>
-                    </div>
-                  </div>
-
-                  {/* THE 8 QUESTIONS MODULE HIGHLIGHT CARD LIST */}
-                  <div className="space-y-4">
-                    <div className="text-center">
-                      <h3 className="text-base font-bold text-slate-800 tracking-tight">Hỗ trợ đầy đủ 8 dạng câu hỏi chuyên sâu của IC3</h3>
-                      <p className="text-xs text-slate-400 mt-1">Độc quyền xây dựng môi trường mô phỏng Windows & Office tương tác giống phần mềm gốc</p>
+                  {/* Right side live stats container */}
+                  <div className="bg-slate-950/55 border border-slate-800 p-6 rounded-2xl w-full lg:w-80 shrink-0 shadow-2xl relative z-10" id="hero-aesthetic-badge">
+                    <div className="flex items-center gap-2 border-b border-slate-800 pb-3 mb-4">
+                      <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-[10px] text-zinc-400 font-extrabold font-mono tracking-wider uppercase">Cơ sở dữ liệu sẵn sàng</span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="questions-architecture-display">
-                      <div className="bg-white p-4 border border-slate-200 rounded-xl space-y-1.5 text-left shadow-xs hover:border-blue-400 transition">
-                        <div className="text-xs font-bold text-blue-600">01. Multiple Choice</div>
-                        <p className="text-xs text-slate-500 leading-normal">Trắc nghiệm một đáp án đúng truyền thống.</p>
+                    <div className="space-y-4 text-xs font-semibold text-slate-300">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Mô phỏng 100% áp lực phòng thi thật</span>
                       </div>
-                      <div className="bg-white p-4 border border-slate-200 rounded-xl space-y-1.5 text-left shadow-xs hover:border-blue-400 transition">
-                        <div className="text-xs font-bold text-blue-600">02. Multiple Response</div>
-                        <p className="text-xs text-slate-500 leading-normal">Chọn nhiều phương án chính xác trong bối cảnh thực tế.</p>
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Giải đáp chi tiết đáp án chi tiết</span>
                       </div>
-                      <div className="bg-white p-4 border border-slate-200 rounded-xl space-y-1.5 text-left shadow-xs hover:border-blue-400 transition">
-                        <div className="text-xs font-bold text-blue-600">03. True / False</div>
-                        <p className="text-xs text-slate-500 leading-normal">Nhận diện khẳng định đúng hay sai khách quan.</p>
-                      </div>
-                      <div className="bg-white p-4 border border-slate-200 rounded-xl space-y-1.5 text-left shadow-xs hover:border-blue-400 transition">
-                        <div className="text-xs font-bold text-blue-600">04. Matching</div>
-                        <p className="text-xs text-slate-500 leading-normal">Hệ thống ghép cặp liên kết phân loại thông số.</p>
-                      </div>
-                      <div className="bg-white p-4 border border-slate-200 rounded-xl space-y-1.5 text-left shadow-xs hover:border-blue-400 transition">
-                        <div className="text-xs font-bold text-blue-600">05. Drag and Drop</div>
-                        <p className="text-xs text-slate-500 leading-normal">Thao tác nạp đối tượng vào đúng sơ đồ vị trí.</p>
-                      </div>
-                      <div className="bg-white p-4 border border-slate-200 rounded-xl space-y-1.5 text-left shadow-xs hover:border-blue-400 transition">
-                        <div className="text-xs font-bold text-blue-600">06. Hotspot</div>
-                        <p className="text-xs text-slate-500 leading-normal">Chỉ điểm chính xác vị trí/icon trên đồ họa ứng dụng.</p>
-                      </div>
-                      <div className="bg-white p-4 border border-slate-200 rounded-xl space-y-1.5 text-left shadow-xs hover:border-blue-400 transition">
-                        <div className="text-xs font-bold text-blue-600">07. Performance Based</div>
-                        <p className="text-xs text-slate-500 leading-normal">Thực hiện tạo file, rename folder trên OS ảo.</p>
-                      </div>
-                      <div className="bg-white p-4 border border-slate-200 rounded-xl space-y-1.5 text-left shadow-xs hover:border-blue-400 transition">
-                        <div className="text-xs font-bold text-blue-600">08. Video Based</div>
-                        <p className="text-xs text-slate-500 leading-normal">Quan sát hoạt ảnh thực tế trước khi tính toán đáp số.</p>
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Học thuật hoàn toàn miễn phí</span>
                       </div>
                     </div>
                   </div>
                 </div>
-              )}
 
-              {/* SCREEN 2: STUDENT LABORATORY / DASHBOARD */}
-              {activeScreen === "dashboard" && activeRole === "student" && (
-                <UserDashboard
-                  onStartPractice={handleStartPractice}
-                  onStartExam={handleStartExam}
-                />
-              )}
+                {/* Grid Modules of GS6 */}
+                <div className="space-y-6" id="landing-modules-summary">
+                  <div className="text-center space-y-1">
+                    <h3 className="text-xl md:text-2xl font-black text-slate-900 font-display">
+                      Cấu Trúc Ba Mảng Thi IC3 GS6
+                    </h3>
+                    <p className="text-xs text-slate-500">Mỗi phần thi được phân loại chính xác theo phân phối chương trình Certiport</p>
+                  </div>
 
-              {/* SCREEN 3: PRACTICE TRAINING COMPONENT */}
-              {activeScreen === "practice" && (
-                <PracticeModule onBackToHome={() => setActiveScreen("homepage")} />
-              )}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6" id="cards-modules-lander">
+                    {IC3_MODULES.map(mod => (
+                      <div key={mod.id} className="bg-white border border-slate-100 p-6 rounded-2xl hover:shadow hover:border-indigo-100 transition duration-200 flex flex-col justify-between" id={`mod-desc-${mod.id}`}>
+                        <div className="space-y-3">
+                          <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center font-black text-indigo-600 font-mono text-sm leading-none">
+                            {mod.id.toUpperCase()}
+                          </div>
+                          <div>
+                            <h4 className="font-extrabold text-slate-900 font-display text-sm leading-snug">{mod.name}</h4>
+                            <p className="text-slate-500 text-xs leading-relaxed mt-1">{mod.description}</p>
+                          </div>
+                        </div>
 
-              {/* SCREEN 4: EDUCATOR CONTROL DESK */}
-              {activeScreen === "teacher" && activeRole === "teacher" && (
-                <TeacherConsole />
-              )}
+                        <div className="border-t border-slate-50 mt-5 pt-3.5 flex justify-between items-center text-[11px] font-bold text-slate-400">
+                          <span>Thời lượng: {mod.timeLimit} phút</span>
+                          <span className="text-indigo-600 hover:underline inline-flex items-center gap-0.5 cursor-pointer" onClick={() => handleStartExam(mod.id)}>
+                            Chi tiết
+                            <ArrowRight className="w-3 h-3" />
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
 
-              {/* SCREEN 5: ROOT SYSTEM BACKUP ADMINISTRATOR */}
-              {activeScreen === "admin" && activeRole === "admin" && (
-                <AdminPanel />
-              )}
-            </>
-          )}
-        </main>
-      </div>
+              </div>
+            )}
 
-      {/* Footer Info Bar */}
-      <footer className="h-10 bg-slate-100 border-t border-slate-200 px-8 flex items-center justify-between text-[10px] text-slate-500 font-medium shrink-0">
-        <div>Engine: V8.4.2-STABLE • Database: REDIS + POSTGRES • Architecture: Microservices</div>
-        <div className="flex gap-6 uppercase">
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> API: 14ms</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> Simulation Core: OK</span>
-          <span>© 2026 IC3 EDUTECH SOLUTION</span>
+            {/* 2. FREE PRACTICE ROUTE */}
+            {resolvedScreen === "practice" && (
+              <PracticeModule onBackToHome={() => setActiveScreen("homepage")} />
+            )}
+
+            {/* 3. EXAM SIM PREP ROUTE */}
+            {resolvedScreen === "exam" && (
+              <ExamPrepList 
+                onStartExam={handleStartExam} 
+                onBackToHome={() => setActiveScreen("homepage")} 
+              />
+            )}
+
+            {/* 4. LEADERBOARD ROUTE */}
+            {resolvedScreen === "leaderboard" && (
+              <Leaderboard onBackToHome={() => setActiveScreen("homepage")} />
+            )}
+
+            {/* 5. ADMIN CONTROL PANEL */}
+            {resolvedScreen === "admin" && firebaseUser && activeRole === "admin" && (
+              <AdminPanel />
+            )}
+
+          </div>
+        )}
+
+      </main>
+
+      {/* Persistent Page Footer */}
+      <footer className="bg-white border-t border-slate-100 py-8 mt-12" id="global-layout-footer-container">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between text-xs text-slate-400 gap-4">
+          <p>© 2026 IC3 Master Portal. Công nghệ luyện thi kỹ năng số tiêu chuẩn quốc tế GS6.</p>
+          <div className="flex items-center gap-4">
+            <a href="#" className="hover:text-slate-600">Điều khoản</a>
+            <a href="#" className="hover:text-slate-600">Bảo mật</a>
+            <span>•</span>
+            <button 
+              onClick={() => { setAuthFlowState("login"); setActiveScreen("homepage"); }}
+              className="text-slate-500 hover:text-indigo-600 font-extrabold flex items-center gap-1 bg-transparent border-none cursor-pointer"
+              id="footer-admin-login-link"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              Đăng nhập quản trị
+            </button>
+          </div>
         </div>
       </footer>
     </div>
   );
 }
 
-export default function LuyenThiIC3RootPage() {
+export default function Home() {
   return (
     <IC3Provider>
       <HomeContent />
