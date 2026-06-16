@@ -1,0 +1,6 @@
+{
+  "name": "Luyện thi IC3",
+  "description": "Nền tảng học tập, luyện tập và giả lập thi thử chứng chỉ IC3 hoàn chỉnh với đầy đủ 8 dạng câu hỏi tương tác chuyên sâu.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
