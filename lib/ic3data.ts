@@ -6,6 +6,20 @@ export interface IC3Question {
   options: string[];
   correctIndex: number;
   explanation: string;
+  level?: string;
+  questionType?: string;
+  optionA?: string;
+  optionB?: string;
+  optionC?: string;
+  optionD?: string;
+  correctAnswer?: string;
+  difficulty?: string;
+  attachments?: { type: string; url: string }[];
+  createdAt?: number;
+  updatedAt?: number;
+  imageUrl?: string;
+  hotspots?: Array<{ x: number; y: number; radius: number }>;
+  correctSequence?: string[];
 }
 
 export interface UserProgress {

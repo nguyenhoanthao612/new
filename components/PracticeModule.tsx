@@ -22,7 +22,11 @@ import {
   HelpCircle,
   Trophy,
   Shield,
-  Loader2
+  Loader2,
+  ArrowUp,
+  ArrowDown,
+  MapPin,
+  RotateCw
 } from "lucide-react";
 
 interface PracticeModuleProps {
@@ -62,7 +66,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
 
   // B. Testing Mode States
   const [isTestActive, setIsTestActive] = useState(false);
-  const [testAnswers, setTestAnswers] = useState<Record<number, number>>({}); // index -> selectedOption index
+  const [testAnswers, setTestAnswers] = useState<Record<number, any>>({}); // index -> selectedOption index or custom answer state
   const [testTimeLeft, setTestTimeLeft] = useState(50 * 60); // 50 mins
   const [testResult, setTestResult] = useState<{
     correctCount: number;
@@ -189,16 +193,39 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
 
   // Submit active question in Training / Race mode
   const handleSubmitAnswer = () => {
-    if (isAnswered || chosenOptionIndex === null || !activeQuestion) return;
+    if (isAnswered || !activeQuestion) return;
+
+    const q = activeQuestion.originalQuestion;
+    let isCorrect = false;
+
+    if (q.questionType === "Hotspot") {
+      const userClicks = Array.isArray(testAnswers[currentQuestionIndex]) ? (testAnswers[currentQuestionIndex] as any[]) : [];
+      const spots = q.hotspots || [];
+      if (spots.length === 0) {
+        isCorrect = true;
+      } else {
+        isCorrect = spots.every(spot => {
+          return userClicks.some((click: any) => {
+            const distance = Math.sqrt(Math.pow(click.x - spot.x, 2) + Math.pow(click.y - spot.y, 2));
+            return distance <= spot.radius;
+          });
+        }) && userClicks.length === spots.length;
+      }
+    } else if (q.questionType === "Ordering / Sequence" || q.questionType === "Ordering") {
+      const userSeq = Array.isArray(testAnswers[currentQuestionIndex]) ? (testAnswers[currentQuestionIndex] as string[]) : [];
+      const correctSeq = q.options || q.correctSequence || [];
+      isCorrect = userSeq.length === correctSeq.length && userSeq.every((val: string, index: number) => val === correctSeq[index]);
+    } else {
+      if (chosenOptionIndex === null) return;
+      isCorrect = chosenOptionIndex === activeQuestion.correctIndexInShuffled;
+      // Save choice to testAnswers index
+      setTestAnswers((prev) => ({
+        ...prev,
+        [currentQuestionIndex]: chosenOptionIndex
+      }));
+    }
 
     setIsAnswered(true);
-    const isCorrect = chosenOptionIndex === activeQuestion.correctIndexInShuffled;
-
-    // Save choice to testAnswers index
-    setTestAnswers((prev) => ({
-      ...prev,
-      [currentQuestionIndex]: chosenOptionIndex
-    }));
 
     if (sessionMode === "training") {
       if (isCorrect) {
@@ -299,9 +326,31 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
     if (!selectedModule) return;
     
     let correct = 0;
-    sessionQuestions.forEach((q, index) => {
-      if (testAnswers[index] === q.correctIndexInShuffled) {
-        correct++;
+    sessionQuestions.forEach((sq, index) => {
+      const q = sq.originalQuestion;
+      if (q.questionType === "Hotspot") {
+        const userClicks = Array.isArray(testAnswers[index]) ? (testAnswers[index] as any[]) : [];
+        const spots = q.hotspots || [];
+        if (spots.length === 0) {
+          correct++;
+        } else {
+          const allHit = spots.every(spot => {
+            return userClicks.some((click: any) => {
+              const distance = Math.sqrt(Math.pow(click.x - spot.x, 2) + Math.pow(click.y - spot.y, 2));
+              return distance <= spot.radius;
+            });
+          }) && userClicks.length === spots.length;
+          if (allHit) correct++;
+        }
+      } else if (q.questionType === "Ordering / Sequence" || q.questionType === "Ordering") {
+        const userSeq = Array.isArray(testAnswers[index]) ? (testAnswers[index] as string[]) : [];
+        const correctSeq = q.options || q.correctSequence || [];
+        const allCorrect = userSeq.length === correctSeq.length && userSeq.every((val: string, iIdx: number) => val === correctSeq[iIdx]);
+        if (allCorrect) correct++;
+      } else {
+        if (testAnswers[index] === sq.correctIndexInShuffled) {
+          correct++;
+        }
       }
     });
 
@@ -718,53 +767,277 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
             </p>
           </div>
 
-          {/* Options Grid */}
-          <div className="grid grid-cols-1 gap-3 text-left" id="prac-options-container">
-            {activeQuestion.shuffledOptions.map((opt, idx) => {
-              const isCorrectOpt = idx === activeQuestion.correctIndexInShuffled;
-              const isChosen = idx === chosenOptionIndex;
-
-              let btnStyle = "border-slate-200 hover:bg-slate-50 bg-white text-slate-700";
-              let badgeStyle = "bg-slate-100 border-slate-200 text-slate-500 font-bold";
-
-              if (isAnswered) {
-                if (isCorrectOpt) {
-                  btnStyle = "bg-emerald-50 border-emerald-400 text-emerald-950";
-                  badgeStyle = "bg-emerald-600 border-emerald-500 text-white font-extrabold";
-                } else if (isChosen) {
-                  btnStyle = "bg-rose-50 border-rose-400 text-rose-950 font-mono";
-                  badgeStyle = "bg-rose-600 border-rose-500 text-white font-extrabold";
-                } else {
-                  btnStyle = "opacity-40 bg-white border-slate-100 text-slate-350 cursor-not-allowed";
-                  badgeStyle = "bg-slate-50 border-slate-100 text-slate-300 font-medium";
-                }
-              } else if (isChosen) {
-                btnStyle = "bg-indigo-50/70 border-indigo-400 text-indigo-950 font-semibold ring-1 ring-indigo-400";
-                badgeStyle = "bg-indigo-600 border-indigo-500 text-white font-extrabold";
-              }
+          {/* Dynamic Options and Interactivity Block */}
+          {(() => {
+            const q = activeQuestion.originalQuestion;
+            
+            if (q.questionType === "Hotspot") {
+              const userClicks = Array.isArray(testAnswers[currentQuestionIndex]) ? (testAnswers[currentQuestionIndex] as any[]) : [];
+              const spots = q.hotspots || [];
+              const maxClicks = spots.length || 1;
+              const defaultImg = "https://picsum.photos/seed/ic3hotspot/800/400";
+              const bgImg = q.imageUrl || defaultImg;
 
               return (
-                <button
-                  key={idx}
-                  id={`practice-module-opt-${idx}`}
-                  disabled={isAnswered}
-                  onClick={() => handleOptionClick(idx)}
-                  className={`flex items-start text-left gap-4 p-4 border rounded-xl font-medium text-xs md:text-sm transition duration-150 cursor-pointer ${btnStyle}`}
-                >
-                  <span className={`w-5.5 h-5.5 rounded-full flex items-center justify-center text-xs border shrink-0 font-mono ${badgeStyle}`}>
-                    {isAnswered && isCorrectOpt ? (
-                      <Check className="w-3.5 h-3.5" />
-                    ) : isAnswered && isChosen ? (
-                      <X className="w-3.5 h-3.5" />
-                    ) : (
-                      String.fromCharCode(65 + idx)
+                <div className="space-y-4" id="practice-hotspot-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
+                    🎯 <strong>Nhiệm vụ Hotspot:</strong> Click trực tiếp chọn <strong>{maxClicks}</strong> vị trí chính xác trên sơ đồ ảnh phần mềm bên dưới để trả lời.
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-50 border border-zinc-200/60 p-3 rounded-xl">
+                    <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                      <MapPin className="h-4 w-4 text-indigo-600 shrink-0" />
+                      <span>Đánh dấu tọa độ: {userClicks.length}/{maxClicks} điểm</span>
+                    </div>
+
+                    {!isAnswered && userClicks.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setTestAnswers(prev => ({
+                            ...prev,
+                            [currentQuestionIndex]: []
+                          }));
+                        }}
+                        className="flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 border border-rose-200 hover:border-rose-300 bg-rose-50 px-2.5 py-1 rounded-lg transition"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>Đặt lại điểm</span>
+                      </button>
                     )}
-                  </span>
-                  <span className={isAnswered && isCorrectOpt ? 'font-bold' : ''}>{opt}</span>
-                </button>
+                  </div>
+
+                  <div className="relative border border-slate-200 rounded-2xl overflow-hidden shadow bg-slate-950 inline-block w-full max-w-[800px]">
+                    <div
+                      onClick={(e) => {
+                        if (isAnswered) return;
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const px = ((e.clientX - rect.left) / rect.width) * 100;
+                        const py = ((e.clientY - rect.top) / rect.height) * 100;
+
+                        let prevAnswers = testAnswers[currentQuestionIndex] || [];
+                        if (!Array.isArray(prevAnswers)) {
+                          prevAnswers = [];
+                        }
+
+                        let updated;
+                        if (prevAnswers.length < maxClicks) {
+                          updated = [...prevAnswers, { x: px, y: py }];
+                        } else {
+                          updated = [...prevAnswers.slice(1), { x: px, y: py }];
+                        }
+
+                        setTestAnswers(prev => ({
+                          ...prev,
+                          [currentQuestionIndex]: updated
+                        }));
+                      }}
+                      className={`relative overflow-hidden select-none cursor-crosshair w-full ${isAnswered ? "pointer-events-none" : ""}`}
+                      style={{ aspectRatio: "800/400" }}
+                    >
+                      {/* Interactive Image */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={bgImg}
+                        alt="Hotspot interface diagram"
+                        className="w-full h-full object-cover select-none pointer-events-none"
+                      />
+
+                      {/* Display User Clicked Target Rings */}
+                      {userClicks.map((click: any, idx: number) => (
+                        <div
+                          key={idx}
+                          className="absolute w-8 h-8 rounded-full border-4 border-rose-500 bg-rose-500/25 flex items-center justify-center -translate-x-1/2 -translate-y-1/2 shadow-lg z-20 animate-pulse"
+                          style={{
+                            left: `${click.x}%`,
+                            top: `${click.y}%`,
+                          }}
+                        >
+                          <div className="w-2.5 h-2.5 bg-rose-600 rounded-full flex items-center justify-center text-[8px] text-white font-bold leading-none font-sans">
+                            {idx + 1}
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Visual Feedbacks for Hotspots Zones (Only exposed when isAnswered) */}
+                      {isAnswered && spots.map((spot: any, idx: number) => {
+                        return (
+                          <div
+                            key={idx}
+                            className="absolute rounded-full border-3 border-emerald-500 bg-emerald-500/15 flex items-center justify-center -translate-x-1/2 -translate-y-1/2 z-10"
+                            style={{
+                              left: `${spot.x}%`,
+                              top: `${spot.y}%`,
+                              width: `${spot.radius * 2}%`,
+                              height: `${spot.radius * 2}%`,
+                            }}
+                          >
+                            <span className="bg-emerald-600 text-[10px] text-white px-1.5 py-0.5 rounded shadow whitespace-nowrap font-bold absolute bottom-full mb-1">
+                              Vùng đúng {idx + 1} (R: {spot.radius}%)
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
               );
-            })}
-          </div>
+            }
+
+            if (q.questionType === "Ordering / Sequence" || q.questionType === "Ordering") {
+              const currentList = testAnswers[currentQuestionIndex] || activeQuestion.shuffledOptions || [];
+              const correctList = q.options || q.correctSequence || [];
+
+              return (
+                <div className="space-y-4 font-sans" id="practice-ordering-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
+                    🔢 <strong>Yêu cầu Sắp xếp:</strong> Drag / Sử dụng các nút mũi tên điều hướng để hoán đổi vị trí các bước theo quy chuẩn thao tác đúng nhất.
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2.5 text-left">
+                    {currentList.map((item: string, idx: number) => {
+                      const isMatching = isAnswered && correctList[idx] === item;
+                      
+                      let cardStyle = "bg-white border-slate-200 text-slate-700";
+                      if (isAnswered) {
+                        if (isMatching) {
+                          cardStyle = "bg-emerald-50 border-emerald-300 text-emerald-950";
+                        } else {
+                          cardStyle = "bg-rose-50 border-rose-300 text-rose-950";
+                        }
+                      }
+
+                      return (
+                        <div
+                          key={idx}
+                          className={`flex items-center justify-between gap-4 p-3 border rounded-xl shadow-sm transition duration-150 ${cardStyle}`}
+                        >
+                          <div className="flex items-center gap-3">
+                            {/* Position Indicator Badge */}
+                            <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold font-mono border shrink-0 ${
+                              isAnswered
+                                ? isMatching
+                                  ? "bg-emerald-600 border-emerald-500 text-white"
+                                  : "bg-rose-600 border-rose-500 text-white"
+                                : "bg-indigo-600 border-indigo-500 text-white"
+                            }`}>
+                              {idx + 1}
+                            </span>
+                            <span className="text-xs sm:text-sm font-semibold">{item}</span>
+                          </div>
+
+                          {/* Arrow swapping buttons */}
+                          {!isAnswered && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                disabled={idx === 0}
+                                onClick={() => {
+                                  if (isAnswered) return;
+                                  const updated = [...currentList];
+                                  const temp = updated[idx];
+                                  updated[idx] = updated[idx - 1];
+                                  updated[idx - 1] = temp;
+                                  setTestAnswers(prev => ({
+                                    ...prev,
+                                    [currentQuestionIndex]: updated
+                                  }));
+                                }}
+                                className="p-1 cursor-pointer bg-slate-50 border border-slate-200 rounded-md hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition disabled:opacity-30 disabled:pointer-events-none"
+                                title="Di chuyển lên"
+                              >
+                                <ArrowUp className="w-4 h-4" />
+                              </button>
+                              <button
+                                disabled={idx === currentList.length - 1}
+                                onClick={() => {
+                                  if (isAnswered) return;
+                                  const updated = [...currentList];
+                                  const temp = updated[idx];
+                                  updated[idx] = updated[idx + 1];
+                                  updated[idx + 1] = temp;
+                                  setTestAnswers(prev => ({
+                                    ...prev,
+                                    [currentQuestionIndex]: updated
+                                  }));
+                                }}
+                                className="p-1 cursor-pointer bg-slate-50 border border-slate-200 rounded-md hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition disabled:opacity-30 disabled:pointer-events-none"
+                                title="Di chuyển xuống"
+                              >
+                                <ArrowDown className="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
+
+                          {isAnswered && (
+                            <div className="flex items-center gap-2 text-xs font-bold">
+                              {isMatching ? (
+                                <span className="text-emerald-600 flex items-center gap-1 font-semibold bg-emerald-100/60 px-2 py-0.5 rounded-lg border border-emerald-200">
+                                  <Check className="w-3.5 h-3.5" /> Đúng bước
+                                </span>
+                              ) : (
+                                <span className="text-rose-600 underline text-[10px] break-all max-w-[200px]">
+                                  Bản đúng: {correctList[idx]}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            // Normal Multiple Choice Option grid
+            return (
+              <div className="grid grid-cols-1 gap-3 text-left" id="prac-options-container">
+                {activeQuestion.shuffledOptions.map((opt, idx) => {
+                  const isCorrectOpt = idx === activeQuestion.correctIndexInShuffled;
+                  const isChosen = idx === chosenOptionIndex;
+
+                  let btnStyle = "border-slate-200 hover:bg-slate-50 bg-white text-slate-700";
+                  let badgeStyle = "bg-slate-100 border-slate-200 text-slate-500 font-bold";
+
+                  if (isAnswered) {
+                    if (isCorrectOpt) {
+                      btnStyle = "bg-emerald-50 border-emerald-400 text-emerald-950";
+                      badgeStyle = "bg-emerald-600 border-emerald-500 text-white font-extrabold";
+                    } else if (isChosen) {
+                      btnStyle = "bg-rose-50 border-rose-400 text-rose-950 font-mono";
+                      badgeStyle = "bg-rose-600 border-rose-500 text-white font-extrabold";
+                    } else {
+                      btnStyle = "opacity-40 bg-white border-slate-100 text-slate-350 cursor-not-allowed";
+                      badgeStyle = "bg-slate-50 border-slate-100 text-slate-300 font-medium";
+                    }
+                  } else if (isChosen) {
+                    btnStyle = "bg-indigo-50/70 border-indigo-400 text-indigo-950 font-semibold ring-1 ring-indigo-400";
+                    badgeStyle = "bg-indigo-600 border-indigo-500 text-white font-extrabold";
+                  }
+
+                  return (
+                    <button
+                      key={idx}
+                      id={`practice-module-opt-${idx}`}
+                      disabled={isAnswered}
+                      onClick={() => handleOptionClick(idx)}
+                      className={`flex items-start text-left gap-4 p-4 border rounded-xl font-medium text-xs md:text-sm transition duration-150 cursor-pointer ${btnStyle}`}
+                    >
+                      <span className={`w-5.5 h-5.5 rounded-full flex items-center justify-center text-xs border shrink-0 font-mono ${badgeStyle}`}>
+                        {isAnswered && isCorrectOpt ? (
+                          <Check className="w-3.5 h-3.5" />
+                        ) : isAnswered && isChosen ? (
+                          <X className="w-3.5 h-3.5" />
+                        ) : (
+                          String.fromCharCode(65 + idx)
+                        )}
+                      </span>
+                      <span className={isAnswered && isCorrectOpt ? 'font-bold' : ''}>{opt}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           {/* Explanation panel upon answering */}
           {isAnswered && (
@@ -905,34 +1178,196 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
           )}
 
           {/* OPTIONS CONTAINER */}
-          {sessionQuestions[currentQuestionIndex] && (
-            <div className="grid grid-cols-1 gap-3 text-left">
-              {sessionQuestions[currentQuestionIndex].shuffledOptions.map((opt, idx) => {
-                const isSelected = testAnswers[currentQuestionIndex] === idx;
+          {sessionQuestions[currentQuestionIndex] && (() => {
+            const sq = sessionQuestions[currentQuestionIndex];
+            const q = sq.originalQuestion;
 
-                return (
-                  <button
-                    key={idx}
-                    onClick={() => handleSelectTestingOption(idx)}
-                    className={`flex items-start gap-4 p-4 rounded-xl text-left font-medium text-xs md:text-sm border transition duration-150 cursor-pointer ${
-                      isSelected 
-                        ? "bg-indigo-950/65 border-indigo-505 text-indigo-100 ring-1 ring-indigo-500" 
-                        : "bg-slate-950/50 border-slate-800 text-slate-300 hover:bg-slate-800"
-                    }`}
-                  >
-                    <span className={`w-5.5 h-5.5 rounded-full flex items-center justify-center text-xs font-mono shrink-0 border transition ${
-                      isSelected 
-                        ? "bg-indigo-600 border-indigo-400 text-white" 
-                        : "bg-slate-901 border-slate-700 text-slate-400"
-                    }`}>
-                      {String.fromCharCode(65 + idx)}
-                    </span>
-                    <span>{opt}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+            if (q.questionType === "Hotspot") {
+              const userClicks = Array.isArray(testAnswers[currentQuestionIndex]) ? (testAnswers[currentQuestionIndex] as any[]) : [];
+              const spots = q.hotspots || [];
+              const maxClicks = spots.length || 1;
+              const defaultImg = "https://picsum.photos/seed/ic3hotspot/800/400";
+              const bgImg = q.imageUrl || defaultImg;
+
+              return (
+                <div className="space-y-4 text-left font-sans" id="testing-hotspot-block">
+                  <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
+                    🎯 <strong>Nhiệm vụ Hotspot (Đo lường):</strong> Nhấp chuột trực tiếp lên sơ đồ giao diện phần mềm bên dưới để đánh dấu đủ <strong>{maxClicks}</strong> vị trí ứng với câu hỏi.
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-950/65 border border-slate-800 p-3 rounded-xl">
+                    <div className="text-xs font-bold text-slate-300 flex items-center gap-1.5 font-mono">
+                      <MapPin className="h-4 w-4 text-indigo-400 shrink-0" />
+                      <span>Đặc tả tọa độ: {userClicks.length}/{maxClicks} điểm</span>
+                    </div>
+
+                    {userClicks.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setTestAnswers(prev => {
+                            const updated = { ...prev };
+                            delete updated[currentQuestionIndex];
+                            return updated;
+                          });
+                        }}
+                        className="flex items-center gap-1 text-[11px] font-bold text-rose-400 hover:text-rose-300 border border-rose-950 bg-rose-950/20 px-2.5 py-1 rounded-lg transition"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>Đặt lại điểm</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="relative border border-slate-800 rounded-2xl overflow-hidden shadow-2xl bg-slate-950 inline-block w-full max-w-[800px]">
+                    <div
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const px = ((e.clientX - rect.left) / rect.width) * 100;
+                        const py = ((e.clientY - rect.top) / rect.height) * 100;
+
+                        let prevAnswers = testAnswers[currentQuestionIndex] || [];
+                        if (!Array.isArray(prevAnswers)) {
+                          prevAnswers = [];
+                        }
+
+                        let updated;
+                        if (prevAnswers.length < maxClicks) {
+                          updated = [...prevAnswers, { x: px, y: py }];
+                        } else {
+                          updated = [...prevAnswers.slice(1), { x: px, y: py }];
+                        }
+
+                        setTestAnswers(prev => ({
+                          ...prev,
+                          [currentQuestionIndex]: updated
+                        }));
+                      }}
+                      className="relative overflow-hidden select-none cursor-crosshair w-full"
+                      style={{ aspectRatio: "800/400" }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={bgImg}
+                        alt="Testing hotspot background"
+                        className="w-full h-full object-cover select-none pointer-events-none"
+                      />
+
+                      {/* User clicks */}
+                      {userClicks.map((click: any, idx: number) => (
+                        <div
+                          key={idx}
+                          className="absolute w-8 h-8 rounded-full border-4 border-rose-500 bg-rose-500/20 flex items-center justify-center -translate-x-1/2 -translate-y-1/2 shadow-lg"
+                          style={{
+                            left: `${click.x}%`,
+                            top: `${click.y}%`,
+                          }}
+                        >
+                          <div className="w-2.5 h-2.5 bg-rose-600 rounded-full flex items-center justify-center text-[8px] text-white font-bold font-sans">
+                            {idx + 1}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Ordering / Sequence" || q.questionType === "Ordering") {
+              const currentList = testAnswers[currentQuestionIndex] || sq.shuffledOptions || [];
+
+              return (
+                <div className="space-y-4 text-left font-sans" id="testing-ordering-block">
+                  <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
+                    🔢 <strong>Quy trình sắp xếp:</strong> Hãy thực hiện bấm chọn các phím mũi tên kéo/hoán đổi để xếp các bước dưới đây theo đúng trình tự nghiệp vụ chuẩn.
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2.5 text-left">
+                    {currentList.map((item: string, idx: number) => {
+                      return (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between gap-4 p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-slate-300"
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950 border border-indigo-800 text-indigo-400 shrink-0">
+                              {idx + 1}
+                            </span>
+                            <span className="text-xs sm:text-sm font-semibold">{item}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              disabled={idx === 0}
+                              onClick={() => {
+                                const updated = [...currentList];
+                                const temp = updated[idx];
+                                updated[idx] = updated[idx - 1];
+                                updated[idx - 1] = temp;
+                                setTestAnswers(prev => ({
+                                  ...prev,
+                                  [currentQuestionIndex]: updated
+                                }));
+                              }}
+                              className="p-1 cursor-pointer bg-slate-950 border border-slate-800 rounded-md hover:bg-indigo-950 hover:text-indigo-400 transition disabled:opacity-20 disabled:pointer-events-none"
+                            >
+                              <ArrowUp className="w-4 h-4" />
+                            </button>
+                            <button
+                              disabled={idx === currentList.length - 1}
+                              onClick={() => {
+                                const updated = [...currentList];
+                                const temp = updated[idx];
+                                updated[idx] = updated[idx + 1];
+                                updated[idx + 1] = temp;
+                                setTestAnswers(prev => ({
+                                  ...prev,
+                                  [currentQuestionIndex]: updated
+                                }));
+                              }}
+                              className="p-1 cursor-pointer bg-slate-950 border border-slate-800 rounded-md hover:bg-indigo-950 hover:text-indigo-400 transition disabled:opacity-20 disabled:pointer-events-none"
+                            >
+                              <ArrowDown className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            // Normal A/B/C/D Multiple Choice list
+            return (
+              <div className="grid grid-cols-1 gap-3 text-left">
+                {sq.shuffledOptions.map((opt, idx) => {
+                  const isSelected = testAnswers[currentQuestionIndex] === idx;
+
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => handleSelectTestingOption(idx)}
+                      className={`flex items-start gap-4 p-4 rounded-xl text-left font-medium text-xs md:text-sm border transition duration-150 cursor-pointer ${
+                        isSelected 
+                          ? "bg-indigo-950/65 border-indigo-501 text-indigo-100 ring-1 ring-indigo-500" 
+                          : "bg-slate-950/50 border-slate-800 text-slate-300 hover:bg-slate-800"
+                      }`}
+                    >
+                      <span className={`w-5.5 h-5.5 rounded-full flex items-center justify-center text-xs font-mono shrink-0 border transition ${
+                        isSelected 
+                          ? "bg-indigo-600 border-indigo-400 text-white" 
+                          : "bg-slate-901 border-slate-700 text-slate-400"
+                      }`}>
+                        {String.fromCharCode(65 + idx)}
+                      </span>
+                      <span>{opt}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           {/* FOOTER ACTIONS */}
           <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-800 pt-5 gap-4">
@@ -952,22 +1387,21 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
                 Quay lại
               </button>
 
-              {currentQuestionIndex < sessionQuestions.length - 1 ? (
-                <button
-                  onClick={() => setCurrentQuestionIndex(prev => prev + 1)}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition cursor-pointer font-mono"
-                >
-                  Tiếp theo
-                </button>
-              ) : (
-                <button
-                  onClick={handleManualSubmitTest}
-                  className="px-6 py-2.5 bg-emerald-650 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-lg transition flex items-center gap-1.5 cursor-pointer uppercase tracking-wider font-mono"
-                >
-                  <ShieldCheck className="w-4.5 h-4.5 shrink-0" />
-                  Nộp Đề Thi Thử
-                </button>
-              )}
+              <button
+                disabled={currentQuestionIndex === sessionQuestions.length - 1}
+                onClick={() => setCurrentQuestionIndex(prev => prev + 1)}
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-30 disabled:pointer-events-none text-white rounded-xl text-xs font-black transition cursor-pointer font-mono"
+              >
+                Tiếp theo
+              </button>
+
+              <button
+                onClick={handleManualSubmitTest}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-lg transition flex items-center gap-1.5 cursor-pointer uppercase tracking-wider font-mono ml-1.5"
+              >
+                <ShieldCheck className="w-4.5 h-4.5 shrink-0" />
+                Nộp Đề Thi Thử
+              </button>
             </div>
           </div>
 

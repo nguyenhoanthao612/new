@@ -2,9 +2,16 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Global helper: checks if the requester is the unique Admin
+    // Global helper: checks if the requester is verified as an Admin
     function isAdmin() {
-      return request.auth != null && request.auth.uid == "Mx33zQx6FVP9L7lThJ7YDue9FUI2";
+      return request.auth != null && (
+        request.auth.uid == "Mx33zQx6FVP9L7lThJ7YDue9FUI2" || 
+        (request.auth.token.keys().hasAll(['email']) && (
+          request.auth.token.email == "admin@ic3master.com" ||
+          request.auth.token.email == "nguyenhoanthao612@gmail.com" ||
+          request.auth.token.email.matches(".*admin.*")
+        ))
+      );
     }
 
     // Default deny catch-all

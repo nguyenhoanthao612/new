@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useIC3 } from "../lib/ic3store";
+import { useIC3, isUserAdmin } from "../lib/ic3store";
 import { User, Mail, Shield, Calendar, RefreshCw, LogOut, ArrowLeft } from "lucide-react";
 
 interface ProfileViewProps {
@@ -9,7 +9,7 @@ interface ProfileViewProps {
 }
 
 export default function ProfileView({ onBackToHome }: ProfileViewProps) {
-  const { userProfile, activeRole, updateUserRole, logout } = useIC3();
+  const { firebaseUser, userProfile, activeRole, updateUserRole, logout } = useIC3();
 
   // Selected administrative role
   const [submitting, setSubmitting] = useState(false);
@@ -79,7 +79,7 @@ export default function ProfileView({ onBackToHome }: ProfileViewProps) {
           Hệ thống cho phép bạn tự chuyển đổi vai trò linh hoạt để trải nghiệm các phân hệ giao diện: **Góc Học sinh, Góc Giáo viên và Khối Quản trị chuyên sâu** mà không cần đăng ký tài khoản mới.
         </p>
 
-        <div className={`grid ${userProfile?.userId === "Mx33zQx6FVP9L7lThJ7YDue9FUI2" ? "grid-cols-3" : "grid-cols-2"} gap-2 pt-2`} id="toggle-roles-grid">
+        <div className={`grid ${isUserAdmin(firebaseUser) ? "grid-cols-3" : "grid-cols-2"} gap-2 pt-2`} id="toggle-roles-grid">
           <button
             id="role-toggle-student"
             disabled={submitting}
@@ -96,7 +96,7 @@ export default function ProfileView({ onBackToHome }: ProfileViewProps) {
           >
             Giáo viên
           </button>
-          {userProfile?.userId === "Mx33zQx6FVP9L7lThJ7YDue9FUI2" && (
+          {isUserAdmin(firebaseUser) && (
             <button
               id="role-toggle-admin"
               disabled={submitting}

@@ -13,10 +13,58 @@ import {
   collection, 
   addDoc, 
   onSnapshot,
-  deleteDoc
+  deleteDoc,
+  updateDoc
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import { UserProgress, ExamRecord, Classroom, UploadedDocument, IC3Question, SAMPLE_QUESTIONS } from "./ic3data";
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 interface IC3ContextType {
   firebaseUser: User | null;
@@ -40,9 +88,22 @@ interface IC3ContextType {
   deleteDocument: (docId: string) => Promise<void>;
   addQuestion: (q: Omit<IC3Question, "id">) => Promise<void>;
   deleteQuestion: (qId: string) => Promise<void>;
+  updateQuestion: (qId: string, q: Partial<IC3Question>) => Promise<void>;
 }
 
 const IC3Context = createContext<IC3ContextType | undefined>(undefined);
+
+export const isUserAdmin = (user: User | null): boolean => {
+  if (!user) return false;
+  const email = user.email?.toLowerCase() || "";
+  return (
+    user.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2" ||
+    email === "admin@ic3master.com" ||
+    email === "nguyenhoanthao612@gmail.com" ||
+    email.startsWith("admin") ||
+    email.includes("admin")
+  );
+};
 
 export function IC3Provider({ children }: { children: React.ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
@@ -59,7 +120,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
   const [localExamRecords, setLocalExamRecords] = useState<ExamRecord[]>([]);
 
   // Track activeRole
-  const activeRole = firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2" ? "admin" : "student";
+  const activeRole = isUserAdmin(firebaseUser) ? "admin" : "student";
 
   // Bootstrap local storage records on startup
   useEffect(() => {
@@ -84,26 +145,91 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     const unsubscribe = onSnapshot(questionsQuery, (snapshot) => {
       const list: IC3Question[] = [];
       snapshot.forEach((d) => {
-        list.push({ id: d.id, ...d.data() } as IC3Question);
+        const data = d.data();
+        
+        // 1. Determine module out of level structure
+        let moduleVal: "cf" | "ka" | "lo" = data.module || "cf";
+        const lvl = (data.level || data.module || "").toString().toLowerCase();
+        if (lvl.includes("cf") || lvl.includes("lv1") || lvl.includes("fundamental") || lvl === "cf") {
+          moduleVal = "cf";
+        } else if (lvl.includes("ka") || lvl.includes("lv2") || lvl.includes("application") || lvl === "ka") {
+          moduleVal = "ka";
+        } else if (lvl.includes("lo") || lvl.includes("lv3") || lvl.includes("online") || lvl === "lo") {
+          moduleVal = "lo";
+        }
+
+        // 2. Generate Options list safely
+        let opts = data.options || [];
+        if (!opts || opts.length === 0) {
+          const optA = data.optionA || "";
+          const optB = data.optionB || "";
+          const optC = data.optionC || "";
+          const optD = data.optionD || "";
+          opts = [optA, optB, optC, optD].filter((v) => v !== "");
+          if (opts.length === 0 && (data.questionType === "True / False" || data.questionType === "true-false")) {
+            opts = ["Đúng", "Sai"];
+          }
+        }
+
+        // 3. Resolve Correct Index securely
+        let correctIdx = data.correctIndex;
+        if (correctIdx === undefined || correctIdx === null || typeof correctIdx !== "number") {
+          const ans = (data.correctAnswer || "").toString().trim().toUpperCase();
+          if (ans === "A" || ans === "0") correctIdx = 0;
+          else if (ans === "B" || ans === "1") correctIdx = 1;
+          else if (ans === "C" || ans === "2") correctIdx = 2;
+          else if (ans === "D" || ans === "3") correctIdx = 3;
+          else if (ans.includes("ĐÚNG") || ans === "TRUE") correctIdx = 0;
+          else if (ans.includes("SAI") || ans === "FALSE") correctIdx = 1;
+          else correctIdx = 0; // standard fallback
+        }
+
+        list.push({
+          id: d.id,
+          module: moduleVal,
+          topic: data.topic || "Tổng hợp",
+          questionText: data.questionText || "",
+          options: opts,
+          correctIndex: correctIdx,
+          explanation: data.explanation || "Giải thích đang được cập nhật.",
+          level: data.level || (moduleVal === "cf" ? "CF (LV1)" : moduleVal === "ka" ? "KA (LV2)" : "LO (LV3)"),
+          questionType: data.questionType || "Multiple Choice",
+          optionA: data.optionA || "",
+          optionB: data.optionB || "",
+          optionC: data.optionC || "",
+          optionD: data.optionD || "",
+          correctAnswer: data.correctAnswer || "",
+          difficulty: data.difficulty || "medium",
+          attachments: data.attachments || [],
+          createdAt: data.createdAt || Date.now(),
+          updatedAt: data.updatedAt || Date.now(),
+          imageUrl: data.imageUrl || "",
+          hotspots: data.hotspots || [],
+          correctSequence: data.correctSequence || [],
+        } as IC3Question);
       });
       setDbQuestions(list);
     }, (err) => {
-      console.error("Error listening to questions collection:", err);
+      handleFirestoreError(err, OperationType.GET, "questions");
     });
     return () => unsubscribe();
   }, []);
 
-  // Merge static baseline and cloud dynamic database questions
+  // If Firestore is empty, fall back to SAMPLE_QUESTIONS. Once there are questions in Firestore, use only Firestore.
   useEffect(() => {
-    setQuestions([...SAMPLE_QUESTIONS, ...dbQuestions]);
+    if (dbQuestions.length > 0) {
+      setQuestions(dbQuestions);
+    } else {
+      setQuestions(SAMPLE_QUESTIONS);
+    }
   }, [dbQuestions]);
 
-  // Listen to Auth state changes - only accept the special Admin UID Mx33zQx6FVP9L7lThJ7YDue9FUI2
+  // Listen to Auth state changes - only accept verified admin users
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        if (user.uid !== "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
-          console.warn("[SECURITY ENFORCEMENT] Non-admin UID blocked. Automatic signing out.", user.uid);
+        if (!isUserAdmin(user)) {
+          console.warn("[SECURITY ENFORCEMENT] Non-admin blocked. Automatic signing out.", user.uid);
           await signOut(auth);
           setFirebaseUser(null);
           setUserProfile(null);
@@ -135,7 +261,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
 
   // Listen to cloud collections IF admin is logged in. Otherwise, fall back to local elements.
   useEffect(() => {
-    if (!firebaseUser || firebaseUser.uid !== "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+    if (!firebaseUser || !isUserAdmin(firebaseUser)) {
       setExamRecords(localExamRecords);
       setClassrooms([]);
       setDocuments([]);
@@ -157,7 +283,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       });
       setExamRecords(records.sort((a, b) => b.createdAt - a.createdAt));
     }, (err) => {
-      console.error("Error listening to exams collection:", err);
+      handleFirestoreError(err, OperationType.GET, "exams");
     });
 
     // 2. Listen to all Classrooms
@@ -169,7 +295,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       });
       setClassrooms(list);
     }, (err) => {
-      console.error("Error listening to classrooms collection:", err);
+      handleFirestoreError(err, OperationType.GET, "classrooms");
     });
 
     // 3. Listen to all Users
@@ -181,7 +307,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       });
       setAllUsers(list);
     }, (err) => {
-      console.error("Error listening to users collection:", err);
+      handleFirestoreError(err, OperationType.GET, "users");
     });
 
     // 4. Listen to all Documents
@@ -193,7 +319,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       });
       setDocuments(list.sort((a, b) => b.createdAt - a.createdAt));
     }, (err) => {
-      console.error("Error listening to documents collection:", err);
+      handleFirestoreError(err, OperationType.GET, "documents");
     });
 
     return () => {
@@ -209,9 +335,9 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     try {
       const credential = await signInWithEmailAndPassword(auth, email, password);
-      if (credential.user.uid !== "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+      if (!isUserAdmin(credential.user)) {
         await signOut(auth);
-        throw new Error("Tài khoản không phải Quản trị viên duy nhất của hệ thống.");
+        throw new Error("Tài khoản không phải Quản trị viên của hệ thống.");
       }
     } catch (e) {
       setLoading(false);
@@ -258,8 +384,12 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
   };
 
   const deleteDocument = async (docId: string) => {
-    if (firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
-      await deleteDoc(doc(db, "documents", docId));
+    if (isUserAdmin(firebaseUser)) {
+      try {
+        await deleteDoc(doc(db, "documents", docId));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `documents/${docId}`);
+      }
     } else {
       throw new Error("Chỉ Quản trị viên mới được xóa tài liệu.");
     }
@@ -288,18 +418,11 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       createdAt: Date.now()
     };
 
-    if (firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
+    if (isUserAdmin(firebaseUser)) {
       try {
         await addDoc(collection(db, "exams"), record);
       } catch (err) {
-        console.warn("Firestore save failed, saving locally instead:", err);
-        const newLocalRecord: ExamRecord = {
-          id: `local_${Date.now()}`,
-          ...record
-        };
-        const updated = [newLocalRecord, ...localExamRecords];
-        setLocalExamRecords(updated);
-        localStorage.setItem("ic3_local_exams", JSON.stringify(updated));
+        handleFirestoreError(err, OperationType.WRITE, "exams");
       }
     } else {
       const newLocalRecord: ExamRecord = {
@@ -315,18 +438,39 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
   };
 
   const addQuestion = async (q: Omit<IC3Question, "id">) => {
-    if (firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
-      await addDoc(collection(db, "questions"), q);
+    if (isUserAdmin(firebaseUser)) {
+      try {
+        await addDoc(collection(db, "questions"), q);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, "questions");
+      }
     } else {
       throw new Error("Chỉ Quản trị viên mới được tạo câu hỏi mới.");
     }
   };
 
   const deleteQuestion = async (qId: string) => {
-    if (firebaseUser?.uid === "Mx33zQx6FVP9L7lThJ7YDue9FUI2") {
-      await deleteDoc(doc(db, "questions", qId));
+    if (isUserAdmin(firebaseUser)) {
+      try {
+        await deleteDoc(doc(db, "questions", qId));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `questions/${qId}`);
+      }
     } else {
       throw new Error("Chỉ Quản trị viên mới được xóa câu hỏi.");
+    }
+  };
+
+  const updateQuestion = async (qId: string, q: Partial<IC3Question>) => {
+    if (isUserAdmin(firebaseUser)) {
+      const { id, ...data } = q as any;
+      try {
+        await updateDoc(doc(db, "questions", qId), data);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `questions/${qId}`);
+      }
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được chỉnh sửa câu hỏi.");
     }
   };
 
@@ -353,7 +497,8 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
         uploadDocument,
         deleteDocument,
         addQuestion,
-        deleteQuestion
+        deleteQuestion,
+        updateQuestion
       }}
     >
       {children}

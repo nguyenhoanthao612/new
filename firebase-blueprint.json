@@ -169,6 +169,15 @@
           "enum": ["cf", "ka", "lo"],
           "description": "The IC3 GS6 module/level."
         },
+        "level": {
+          "type": "string",
+          "enum": ["cf", "ka", "lo", "CF", "KA", "LO", "CF (LV1)", "KA (LV2)", "LO (LV3)"],
+          "description": "The level classification as requested."
+        },
+        "questionType": {
+          "type": "string",
+          "description": "The type of intermediate interactive simulator question."
+        },
         "topic": {
           "type": "string",
           "description": "The subtopic of the module."
@@ -176,6 +185,26 @@
         "questionText": {
           "type": "string",
           "description": "The query statement text."
+        },
+        "optionA": {
+          "type": "string",
+          "description": "Option A value"
+        },
+        "optionB": {
+          "type": "string",
+          "description": "Option B value"
+        },
+        "optionC": {
+          "type": "string",
+          "description": "Option C value"
+        },
+        "optionD": {
+          "type": "string",
+          "description": "Option D value"
+        },
+        "correctAnswer": {
+          "type": "string",
+          "description": "Correct answer index representation, e.g. 'A' or multiple indices."
         },
         "options": {
           "type": "array",
@@ -188,9 +217,25 @@
         "explanation": {
           "type": "string",
           "description": "Explanation for why the option is correct."
+        },
+        "difficulty": {
+          "type": "string",
+          "description": "Difficulty level of the question."
+        },
+        "attachments": {
+          "type": "array",
+          "description": "List of resource attachments for the question."
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Epoch creation timestamp."
+        },
+        "updatedAt": {
+          "type": "integer",
+          "description": "Epoch update timestamp."
         }
       },
-      "required": ["module", "topic", "questionText", "options", "correctIndex", "explanation"]
+      "required": ["questionText", "correctAnswer", "explanation"]
     }
   },
   "firestore": {

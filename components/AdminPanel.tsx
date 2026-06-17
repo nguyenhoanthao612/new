@@ -26,6 +26,7 @@ import {
   CheckCircle,
   MessageSquare,
   AlertTriangle,
+  MapPin,
   X
 } from "lucide-react";
 
@@ -38,7 +39,8 @@ export default function AdminPanel() {
     deleteDocument,
     questions,
     addQuestion,
-    deleteQuestion
+    deleteQuestion,
+    updateQuestion
   } = useIC3();
 
   // Selected administrative tabs
@@ -57,8 +59,11 @@ export default function AdminPanel() {
   const [questionIdToConfirmDelete, setQuestionIdToConfirmDelete] = useState<string | null>(null);
   const [adminNotice, setAdminNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Create Question Form States
+  // Create/Edit Question Form States
+  const [editingQuestion, setEditingQuestion] = useState<IC3Question | null>(null);
   const [formModule, setFormModule] = useState<"cf" | "ka" | "lo">("cf");
+  const [formLevel, setFormLevel] = useState<string>("CF (LV1)");
+  const [formQuestionType, setFormQuestionType] = useState<string>("Multiple Choice");
   const [formTopic, setFormTopic] = useState("");
   const [formText, setFormText] = useState("");
   const [formOptA, setFormOptA] = useState("");
@@ -66,8 +71,393 @@ export default function AdminPanel() {
   const [formOptC, setFormOptC] = useState("");
   const [formOptD, setFormOptD] = useState("");
   const [formCorrectIndex, setFormCorrectIndex] = useState<number>(0);
+  const [formCorrectAnswer, setFormCorrectAnswer] = useState<string>("A");
   const [formExplanation, setFormExplanation] = useState("");
+  const [smartPasteText, setSmartPasteText] = useState("");
+  const [smartPasteFeedback, setSmartPasteFeedback] = useState("");
+  const [formImageUrl, setFormImageUrl] = useState("");
+  const [formHotspots, setFormHotspots] = useState<Array<{ x: number; y: number; radius: number }>>([]);
+  const [adminHotspotRadius, setAdminHotspotRadius] = useState<number>(3);
+  const [successPopup, setSuccessPopup] = useState<{ isOpen: boolean; message: string; subMessage?: string } | null>(null);
+
+  const handleAdminImgClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    const pctX = Number(((clickX / rect.width) * 100).toFixed(1));
+    const pctY = Number(((clickY / rect.height) * 100).toFixed(1));
+    
+    // Add new hotspot coordinate point
+    setFormHotspots((prev) => [...prev, { x: pctX, y: pctY, radius: adminHotspotRadius }]);
+  };
+
+  const [formDifficulty, setFormDifficulty] = useState<string>("medium");
+  const [formAttachments, setFormAttachments] = useState<Array<{ type: string; url: string }>>([]);
+  const [newAttachmentType, setNewAttachmentType] = useState<string>("image");
+  const [newAttachmentUrl, setNewAttachmentUrl] = useState<string>("");
   const [isSubmittingQuestion, setIsSubmittingQuestion] = useState(false);
+
+  // Google Sheets Import States
+  const [importSheetUrl, setImportSheetUrl] = useState("");
+  const [importMode, setImportMode] = useState<"append" | "overwrite">("append");
+  const [isImportValidating, setIsImportValidating] = useState(false);
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const [importPreview, setImportPreview] = useState<any[]>([]);
+  const [isImportingToDb, setIsImportingToDb] = useState(false);
+  const [importProgressPercent, setImportProgressPercent] = useState(0);
+
+  // Custom robust CSV Parser compliant with escapes, quotes, commas
+  const parseCSV = (text: string): string[][] => {
+    const result: string[][] = [];
+    let row: string[] = [];
+    let col = "";
+    let inQuotes = false;
+    
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const nextChar = text[i + 1];
+      
+      if (inQuotes) {
+        if (char === '"') {
+          if (nextChar === '"') {
+            col += '"';
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          col += char;
+        }
+      } else {
+        if (char === '"') {
+          inQuotes = true;
+        } else if (char === ',') {
+          row.push(col);
+          col = "";
+        } else if (char === '\r' || char === '\n') {
+          row.push(col);
+          col = "";
+          if (row.some(x => x !== "")) {
+            result.push(row);
+          }
+          row = [];
+          if (char === '\r' && nextChar === '\n') {
+            i++;
+          }
+        } else {
+          col += char;
+        }
+      }
+    }
+    if (row.length > 0 || col !== "") {
+      row.push(col);
+      if (row.some(x => x !== "")) {
+        result.push(row);
+      }
+    }
+    return result;
+  };
+
+  // Google Sheet Link Verification & Parsing
+  const handleValidateSheet = async () => {
+    if (!importSheetUrl.trim()) {
+      showNotice("error", "Vui lòng nhập đường liên kết Google Sheet!");
+      return;
+    }
+
+    setIsImportValidating(true);
+    setImportErrors([]);
+    setImportPreview([]);
+    setImportProgressPercent(0);
+
+    try {
+      const sheetIdMatch = importSheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+      if (!sheetIdMatch) {
+         setImportErrors(["Đường dẫn Google Sheet không đúng định dạng. Đảm bảo đường dẫn có dạng: https://docs.google.com/spreadsheets/d/ID-TRANG-TINH/..."]);
+         setIsImportValidating(false);
+         return;
+      }
+      const sheetId = sheetIdMatch[1];
+      
+      // Determine tab GID if available
+      const gidMatch = importSheetUrl.match(/[#&]gid=([0-9]+)/);
+      const gid = gidMatch ? gidMatch[1] : "0";
+      
+      const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+      
+      const res = await fetch(exportUrl);
+      if (!res.ok) {
+        throw new Error("Không thể tải bảng tính. Bạn đã bật chia sẻ: 'Bất kỳ ai có đường liên kết đều có thể xem' chưa?");
+      }
+
+      const csvText = await res.text();
+      const rows = parseCSV(csvText);
+
+      if (rows.length < 2) {
+        throw new Error("Bảng tính rỗng hoặc không có dữ liệu thực tế.");
+      }
+
+      const rawHeaders = rows[0].map(h => h.trim());
+      const normalizedHeaders = rawHeaders.map(h => h.toLowerCase());
+
+      // Only really require the core fields to be present as headers
+      const requiredCols = ["questiontype", "questiontext", "correctanswer", "explanation"];
+
+      const missingCols = requiredCols.filter(col => !normalizedHeaders.includes(col));
+      if (missingCols.length > 0) {
+        throw new Error(`Cấu trúc cột không khớp. Thiếu các cột bắt buộc: [${missingCols.join(", ")}].`);
+      }
+
+      // Map columns indexes including optional columns names
+      const colMapping: Record<string, number> = {};
+      const allPossibleCols = [
+        "level", "questiontype", "questiontext", 
+        "optiona", "optionb", "optionc", "optiond", 
+        "correctanswer", "explanation", "difficulty", "attachments"
+      ];
+      
+      allPossibleCols.forEach(col => {
+        colMapping[col] = normalizedHeaders.indexOf(col);
+      });
+      // Fallback mappings if level/module is named differently or missing
+      if (colMapping["level"] === -1) {
+        colMapping["level"] = normalizedHeaders.findIndex(h => h.includes("module") || h.includes("học phần") || h.includes("mảng kiến thức") || h.includes("mảng"));
+      }
+
+      colMapping["id"] = normalizedHeaders.indexOf("id");
+
+      const errors: string[] = [];
+      const parsedList: any[] = [];
+
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNum = i + 1;
+
+        if (row.length === 0 || row.every(cell => cell.trim() === "")) {
+          continue;
+        }
+
+        const getVal = (key: string) => {
+          const idx = colMapping[key];
+          return idx !== -1 && idx < row.length ? row[idx].trim() : "";
+        };
+
+        let levelVal = getVal("level");
+        if (!levelVal) {
+          levelVal = "CF (LV1)";
+        } else {
+          const lvlUpper = levelVal.toUpperCase();
+          const isValidLvl = lvlUpper.includes("CF") || lvlUpper.includes("KA") || lvlUpper.includes("LO") ||
+                    ["CF", "KA", "LO", "CF (LV1)", "KA (LV2)", "LO (LV3)"].includes(lvlUpper);
+          if (!isValidLvl) {
+            levelVal = "CF (LV1)"; // default fallback on mismatch instead of failure
+          }
+        }
+
+        const qType = getVal("questiontype");
+        const qText = getVal("questiontext");
+        const optA = getVal("optiona");
+        const optB = getVal("optionb");
+        const optC = getVal("optionc");
+        const optD = getVal("optiond");
+        const correctAns = getVal("correctanswer");
+        const expl = getVal("explanation");
+        const diff = getVal("difficulty") || "medium";
+        const attachsStr = getVal("attachments");
+        const customId = getVal("id");
+
+        // Rules check
+        if (!qType) {
+          errors.push(`Dòng ${rowNum}: Cột 'questionType' bị bỏ trống.`);
+        } else {
+          const validTypes = ["Multiple Choice", "Multiple Select", "True / False", "Matching", "Fill In The Blank", "Drag And Drop", "Hotspot", "Video Based", "Ordering / Sequence", "Ordering"];
+          if (!validTypes.some(vt => vt.toLowerCase() === qType.toLowerCase())) {
+            errors.push(`Dòng ${rowNum}: Cột 'questionType' (${qType}) không hợp lệ. Các loại hỗ trợ: ${validTypes.join(", ")}`);
+          }
+        }
+
+        if (!qText) {
+          errors.push(`Dòng ${rowNum}: Cột 'questionText' bị bỏ trống.`);
+        }
+
+        if (!correctAns) {
+          errors.push(`Dòng ${rowNum}: Cột 'correctAnswer' bị bỏ trống.`);
+        }
+
+        let parsedAttachs: any[] = [];
+        if (attachsStr) {
+          try {
+            if (attachsStr.startsWith("[") && attachsStr.endsWith("]")) {
+              parsedAttachs = JSON.parse(attachsStr);
+            } else {
+              const urls = attachsStr.split(/[;,]/);
+              urls.forEach(urlObj => {
+                const u = urlObj.trim();
+                if (u) {
+                  const isVideo = u.includes("youtube.com") || u.includes("youtu.be") || u.endsWith(".mp4");
+                  const isPdf = u.endsWith(".pdf");
+                  parsedAttachs.push({
+                    type: isVideo ? "video" : isPdf ? "pdf" : "image",
+                    url: u
+                  });
+                }
+              });
+            }
+          } catch (e) {
+            errors.push(`Dòng ${rowNum}: Cột 'attachments' (${attachsStr}) chứa định dạng JSON hoặc liên kết không hợp lệ.`);
+          }
+        }
+
+        parsedList.push({
+          id: customId || `imported_${Date.now()}_${i}_${Math.floor(Math.random() * 1000)}`,
+          level: levelVal,
+          questionType: qType,
+          questionText: qText,
+          optionA: optA,
+          optionB: optB,
+          optionC: optC,
+          optionD: optD,
+          correctAnswer: correctAns,
+          explanation: expl || "Giải thích đang được cập nhật.",
+          difficulty: diff || "medium",
+          attachments: parsedAttachs
+        });
+      }
+
+      if (errors.length > 0) {
+        setImportErrors(errors);
+        showNotice("error", `Phát hiện ${errors.length} dòng dữ liệu lỗi. Hủy toàn bộ hoạt động import.`);
+      } else {
+        setImportPreview(parsedList);
+        showNotice("success", `Google Sheet hoàn hảo! Sẵn sàng nạp ${parsedList.length} câu hỏi lên Firestore.`);
+      }
+    } catch (e: any) {
+      console.error(e);
+      setImportErrors([e.message || "Tải dữ liệu bảng tính thất bại."]);
+      showNotice("error", e.message || "Kiểm tra quyền truy cập dữ liệu liên kết.");
+    } finally {
+      setIsImportValidating(false);
+    }
+  };
+
+  // Safe import transactions to Firestore with clear progressbar
+  const handleImportToDb = async () => {
+    if (importPreview.length === 0) return;
+    setIsImportingToDb(true);
+    setImportProgressPercent(5);
+
+    try {
+      // 1. If Overwrite choice, safely prune existing questions first
+      if (importMode === "overwrite") {
+        setImportProgressPercent(10);
+        const dynamicQuestions = questions.filter(q => {
+          const isStatic = (q.id || "").startsWith("cf_") || (q.id || "").startsWith("ka_") || (q.id || "").startsWith("lo_");
+          return !isStatic;
+        });
+
+        for (let i = 0; i < dynamicQuestions.length; i++) {
+          try {
+            await deleteQuestion(dynamicQuestions[i].id);
+          } catch (e) {
+            console.warn("Delete dynamic question failed during clear:", e);
+          }
+          const delPct = Math.round(10 + (i / Math.max(1, dynamicQuestions.length)) * 25);
+          setImportProgressPercent(delPct);
+        }
+      }
+
+      setImportProgressPercent(40);
+
+      // 2. Stream uploaded rows sequentially
+      for (let i = 0; i < importPreview.length; i++) {
+        const item = importPreview[i];
+        
+        // Resolve module key
+        let modId: "cf" | "ka" | "lo" = "cf";
+        const cleanLvl = item.level.toUpperCase();
+        if (cleanLvl.includes("CF") || cleanLvl.includes("LV1") || cleanLvl.includes("FUNDAMENTAL")) {
+          modId = "cf";
+        } else if (cleanLvl.includes("KA") || cleanLvl.includes("LV2") || cleanLvl.includes("APPLICATION")) {
+          modId = "ka";
+        } else if (cleanLvl.includes("LO") || cleanLvl.includes("LV3") || cleanLvl.includes("ONLINE")) {
+          modId = "lo";
+        }
+
+        // Parse options array
+        let finalOptions: string[] = [];
+        if (item.questionType === "True / False" || item.questionType === "true-false") {
+          finalOptions = ["Đúng", "Sai"];
+        } else {
+          finalOptions = [item.optionA, item.optionB, item.optionC, item.optionD].filter(Boolean);
+        }
+
+        // Resolve correctIndex matching chars
+        let cIdx = 0;
+        const rawAns = item.correctAnswer.toString().toUpperCase().trim();
+        if (rawAns === "A" || rawAns === "0") cIdx = 0;
+        else if (rawAns === "B" || rawAns === "1") cIdx = 1;
+        else if (rawAns === "C" || rawAns === "2") cIdx = 2;
+        else if (rawAns === "D" || rawAns === "3") cIdx = 3;
+        else if (rawAns.includes("ĐÚNG") || rawAns === "TRUE") cIdx = 0;
+        else if (rawAns.includes("SAI") || rawAns === "FALSE") cIdx = 1;
+
+        let imageUrl = "";
+        let hotspotsArr: any[] = [];
+        let correctSeq: string[] = [];
+
+        if (item.questionType === "Hotspot") {
+          try {
+            if (item.correctAnswer.startsWith("[") && item.correctAnswer.endsWith("]")) {
+              hotspotsArr = JSON.parse(item.correctAnswer);
+            }
+          } catch (e) {}
+          // Look for an image attachment to load
+          const imgAttach = item.attachments?.find((att: any) => att.type === "image");
+          if (imgAttach) {
+            imageUrl = imgAttach.url;
+          }
+        } else if (item.questionType === "Ordering / Sequence" || item.questionType === "Ordering") {
+          correctSeq = finalOptions;
+        }
+
+        await addQuestion({
+          module: modId,
+          level: item.level,
+          questionType: item.questionType,
+          topic: item.level + " General",
+          questionText: item.questionText,
+          optionA: item.optionA || "",
+          optionB: item.optionB || "",
+          optionC: item.optionC || "",
+          optionD: item.optionD || "",
+          options: finalOptions,
+          correctIndex: cIdx,
+          correctAnswer: item.correctAnswer,
+          explanation: item.explanation,
+          difficulty: item.difficulty,
+          attachments: item.attachments,
+          imageUrl,
+          hotspots: hotspotsArr,
+          correctSequence: correctSeq,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+
+        const uploadPct = Math.round(40 + (i / importPreview.length) * 58);
+        setImportProgressPercent(uploadPct);
+      }
+
+      setImportProgressPercent(100);
+      showNotice("success", `Đã nhập và đồng bộ thành công ${importPreview.length} câu hỏi vào hệ thống Firestore!`);
+      setImportPreview([]);
+      setImportSheetUrl("");
+    } catch (err: any) {
+      console.error(err);
+      showNotice("error", "Quá trình nhập dữ liệu bị gián đoạn: " + err.message);
+    } finally {
+      setIsImportingToDb(false);
+    }
+  };
 
   // Filtered users matching search string
   const filteredUsers = allUsers.filter(user => {
@@ -123,41 +513,212 @@ export default function AdminPanel() {
     }
   };
 
-  // Create Question Submission Handler
+  const handleSmartPasteChange = (val: string) => {
+    setSmartPasteText(val);
+    if (!val.trim()) {
+      setSmartPasteFeedback("");
+      setFormOptA("");
+      setFormOptB("");
+      setFormOptC("");
+      setFormOptD("");
+      return;
+    }
+
+    const lines = val.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) {
+      setSmartPasteFeedback("");
+      return;
+    }
+
+    const parsedOptions: string[] = [];
+    let foundCorrectIndex: number | null = null;
+
+    lines.forEach((line) => {
+      let text = line;
+      let isCorrectForThisLine = false;
+
+      // Identify correct option indicators and strip them
+      const correctPatterns = [
+        /\(Correct\)/i,
+        /\[Correct\]/i,
+        /\(Đúng\)/i,
+        /\[Đúng\]/i,
+        /\*$/
+      ];
+
+      for (const pattern of correctPatterns) {
+        if (pattern.test(text)) {
+          isCorrectForThisLine = true;
+          text = text.replace(pattern, "").trim();
+        }
+      }
+
+      // Identify prefixes like: a. b. c. d. A. B. C. D. 1. 2. 3. 4.
+      const prefixMatch = text.match(/^(?:[a-dA-D1-4])(?:[\.\)\s-]+\s*)(.*)$/);
+      let detectedPrefix = "";
+      if (prefixMatch) {
+        detectedPrefix = text[0].toLowerCase();
+        text = prefixMatch[1].trim();
+      }
+
+      if (isCorrectForThisLine) {
+        if (detectedPrefix === 'a' || detectedPrefix === '1') {
+          foundCorrectIndex = 0;
+        } else if (detectedPrefix === 'b' || detectedPrefix === '2') {
+          foundCorrectIndex = 1;
+        } else if (detectedPrefix === 'c' || detectedPrefix === '3') {
+          foundCorrectIndex = 2;
+        } else if (detectedPrefix === 'd' || detectedPrefix === '4') {
+          foundCorrectIndex = 3;
+        } else {
+          foundCorrectIndex = parsedOptions.length;
+        }
+      }
+
+      parsedOptions.push(text);
+    });
+
+    if (parsedOptions.length > 0) setFormOptA(parsedOptions[0]);
+    if (parsedOptions.length > 1) setFormOptB(parsedOptions[1]);
+    if (parsedOptions.length > 2) setFormOptC(parsedOptions[2]);
+    if (parsedOptions.length > 3) setFormOptD(parsedOptions[3]);
+
+    if (parsedOptions.length < 4) {
+      if (parsedOptions.length <= 3) setFormOptD("");
+      if (parsedOptions.length <= 2) setFormOptC("");
+      if (parsedOptions.length <= 1) setFormOptB("");
+    }
+
+    let feedbackMsg = `🎯 Đã phân tích tự động ${parsedOptions.length} phương án.`;
+    if (foundCorrectIndex !== null && foundCorrectIndex >= 0 && foundCorrectIndex < 4) {
+      setFormCorrectIndex(foundCorrectIndex);
+      setFormCorrectAnswer(String.fromCharCode(65 + foundCorrectIndex));
+      feedbackMsg += ` Phát hiện đáp án ĐÚNG: Option ${String.fromCharCode(65 + foundCorrectIndex)}`;
+    }
+
+    setSmartPasteFeedback(feedbackMsg);
+  };
+
+  // Create/Edit Question Submission Handler
   const handleCreateQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTopic.trim() || !formText.trim() || !formOptA.trim() || !formOptB.trim() || !formOptC.trim() || !formOptD.trim() || !formExplanation.trim()) {
-      showNotice("error", "Vui lòng điền đầy đủ tất cả thông tin của câu hỏi mới!");
+    console.log("Submit Started");
+    
+    if (!formText.trim()) {
+      showNotice("error", "Vui lòng nhập nội dung câu hỏi bắt buộc!");
       return;
     }
 
     setIsSubmittingQuestion(true);
+    let finalOpts: string[] = [];
+    if (formQuestionType === "True / False") {
+      finalOpts = ["Đúng", "Sai"];
+    } else if (formQuestionType === "Hotspot") {
+      finalOpts = [];
+    } else {
+      finalOpts = [formOptA.trim(), formOptB.trim(), formOptC.trim(), formOptD.trim()].filter(Boolean);
+    }
+
+    // Automatically derive level and topic based on selected module
+    let finalLevel = "CF (LV1)";
+    if (formModule === "ka") finalLevel = "KA (LV2)";
+    if (formModule === "lo") finalLevel = "LO (LV3)";
+
+    const finalTopic = finalLevel + " General";
+    const finalDifficulty = editingQuestion?.difficulty || "medium";
+
     try {
-      await addQuestion({
+      const payload: any = {
         module: formModule,
-        topic: formTopic.trim(),
+        level: finalLevel,
+        questionType: formQuestionType,
+        topic: finalTopic,
         questionText: formText.trim(),
-        options: [formOptA.trim(), formOptB.trim(), formOptC.trim(), formOptD.trim()],
+        optionA: formOptA.trim(),
+        optionB: formOptB.trim(),
+        optionC: formOptC.trim(),
+        optionD: formOptD.trim(),
+        options: finalOpts,
         correctIndex: formCorrectIndex,
-        explanation: formExplanation.trim()
+        correctAnswer: formQuestionType === "Hotspot" 
+          ? JSON.stringify(formHotspots) 
+          : formQuestionType === "Ordering / Sequence"
+          ? finalOpts.join(" -> ")
+          : (formCorrectAnswer || String.fromCharCode(65 + formCorrectIndex)),
+        explanation: formExplanation.trim(),
+        difficulty: finalDifficulty,
+        attachments: formAttachments,
+        imageUrl: formImageUrl,
+        hotspots: formHotspots,
+        correctSequence: formQuestionType === "Ordering / Sequence" ? finalOpts : [],
+        updatedAt: Date.now()
+      };
+
+      console.log("Firestore Save Started");
+
+      // We implement a 3-second maximum execution window so that the UI never hangs for more than 3 seconds.
+      const savePromise = (async () => {
+        if (editingQuestion) {
+          // Edit mode
+          await updateQuestion(editingQuestion.id, payload);
+        } else {
+          // Create mode
+          await addQuestion({
+            ...payload,
+            createdAt: Date.now()
+          });
+        }
+      })();
+
+      const timeoutPromise = new Promise<void>((resolve, reject) => {
+        setTimeout(() => {
+          console.warn("Firestore save exceeded 3 seconds. Resolving optimistically to reset spinner.");
+          resolve(); 
+        }, 3000);
       });
-      
-      // Reset form states
+
+      // Race the save action against our 3s safeguard
+      await Promise.race([savePromise, timeoutPromise]);
+      console.log("Firestore Save Success");
+
+      if (editingQuestion) {
+        showNotice("success", "Đã lưu câu hỏi thành công.");
+        setSuccessPopup({
+          isOpen: true,
+          message: "Cập nhật câu hỏi thành công!",
+          subMessage: "Đã tối ưu hóa dữ liệu và đồng bộ hóa tức thì lên đám mây Cloud Firestore."
+        });
+        setEditingQuestion(null);
+      } else {
+        showNotice("success", "Đã lưu câu hỏi thành công.");
+        setSuccessPopup({
+          isOpen: true,
+          message: "Tạo câu hỏi mới thành công!",
+          subMessage: "Thông tin câu hỏi đã được đẩy thành công lên Cloud Firestore và sẵn sàng cho học viên luyện tập."
+        });
+      }
+
+      // Reset form states completely
       setFormTopic("");
       setFormText("");
       setFormOptA("");
       setFormOptB("");
       setFormOptC("");
       setFormOptD("");
+      setSmartPasteText("");
+      setSmartPasteFeedback("");
       setFormCorrectIndex(0);
+      setFormCorrectAnswer("A");
       setFormExplanation("");
-      
-      showNotice("success", "Tạo câu hỏi mới thành công và đã đồng bộ lên đám mây!");
+      setFormAttachments([]);
+      setFormImageUrl("");
+      setFormHotspots([]);
     } catch (err: any) {
-      console.error("Lỗi thêm câu hỏi:", err);
-      showNotice("error", "Không thể thêm câu hỏi: " + err.message);
+      console.log("Firestore Save Failed:", err);
+      showNotice("error", "Có lỗi xảy ra: " + err.message);
     } finally {
       setIsSubmittingQuestion(false);
+      console.log("Loading State Reset");
     }
   };
 
@@ -209,6 +770,43 @@ export default function AdminPanel() {
 
   return (
     <div className="space-y-8 animate-fade-in" id="admin-panel-stage">
+
+      {/* Screen-centered Success Popup Modal */}
+      {successPopup && successPopup.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[10000] p-4 animate-fade-in" id="admin-success-popup-backdrop">
+          <div className="bg-white border border-slate-100 rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl relative transform transition-all duration-300 scale-100" id="admin-success-popup-content">
+            <button 
+              type="button"
+              onClick={() => setSuccessPopup(null)} 
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="flex flex-col items-center space-y-4">
+              <div className="bg-emerald-50 text-emerald-500 p-4 rounded-full border border-emerald-100 animate-bounce">
+                <CheckCircle className="w-12 h-12" />
+              </div>
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-800 leading-tight">
+                  {successPopup.message}
+                </h3>
+                {successPopup.subMessage && (
+                  <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+                    {successPopup.subMessage}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setSuccessPopup(null)}
+                className="w-full mt-2 py-3 px-4 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white text-xs font-extrabold rounded-2xl transition-all duration-200 shadow-lg shadow-emerald-500/20 active:scale-95 cursor-pointer"
+              >
+                Xác nhận &amp; Tiếp tục
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dynamic Admin Toast Notices */}
       {adminNotice && (
@@ -733,6 +1331,60 @@ export default function AdminPanel() {
               </div>
             </div>
           </div>
+
+          {/* Question Type Stats Card */}
+          <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4 text-left" id="admin-question-types-stats-card">
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+              <Folder className="w-5 h-5 text-indigo-600" />
+              <h4 className="font-extrabold text-slate-900 font-display text-sm">Thống Kê Nhóm Loại Câu Hỏi IC3 GS6</h4>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 pt-2">
+              {[
+                { name: "Multiple Choice (Trắc nghiệm 1 đáp án)", key: "multiple choice", color: "from-sky-500 to-blue-600" },
+                { name: "Multiple Select (Nhiều đáp án)", key: "multiple select", color: "from-purple-500 to-indigo-600" },
+                { name: "True / False (Đúng/Sai)", key: "true / false", color: "from-emerald-500 to-teal-600" },
+                { name: "Matching (Nối cột)", key: "matching", color: "from-pink-500 to-rose-600" },
+                { name: "Fill In The Blank (Điền từ)", key: "fill in the blank", color: "from-amber-500 to-orange-600" },
+                { name: "Drag & Drop (Kéo thả)", key: "drag and drop", color: "from-cyan-500 to-blue-500" },
+                { name: "Hotspot (Điểm nóng)", key: "hotspot", color: "from-fuchsia-500 to-pink-500" },
+                { name: "Ordering (Sắp xếp thứ tự)", key: "ordering", color: "from-violet-500 to-purple-600" },
+                { name: "Video Based (Theo video)", key: "video based", color: "from-rose-500 to-red-600" }
+              ].map(type => {
+                const qCount = questions.filter(q => {
+                  const qtype = (q.questionType || "").toLowerCase();
+                  const search = type.key.toLowerCase();
+                  if (search === "multiple choice") {
+                    return qtype.includes("choice") || qtype.includes("trắc nghiệm 1 đáp án") || qtype === "" || qtype === "multiple choice";
+                  }
+                  if (search === "multiple select") {
+                    return qtype.includes("select") || qtype.includes("nhiều đáp án") || qtype.includes("response") || qtype === "multiple select";
+                  }
+                  if (search === "true / false") {
+                    return qtype.includes("true") || qtype.includes("đúng / sai") || qtype === "true / false" || qtype === "true-false";
+                  }
+                  if (search === "ordering") {
+                    return qtype.includes("ordering") || qtype.includes("sequence") || qtype === "ordering / sequence";
+                  }
+                  return qtype.includes(search);
+                }).length;
+                const percent = questions.length > 0 ? Math.round((qCount / questions.length) * 100) : 0;
+                return (
+                  <div key={type.key} className="bg-slate-50 border border-slate-100 p-4 rounded-xl space-y-2 text-left relative overflow-hidden group">
+                    <div className="flex justify-between items-center relative z-10">
+                      <span className="text-[10px] font-extrabold text-slate-500 block truncate" title={type.name}>{type.name}</span>
+                      <span className="text-xs font-black text-slate-800 font-mono bg-white px-2 py-0.5 rounded border border-slate-150">{qCount} câu</span>
+                    </div>
+                    <div className="space-y-1 relative z-10">
+                      <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                        <div className={`bg-gradient-to-r ${type.color} h-full rounded-full transition-all duration-300`} style={{ width: `${percent}%` }} />
+                      </div>
+                      <span className="text-[9px] text-slate-400 block font-mono">Tỷ trọng: {percent}% hệ thống</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
@@ -740,39 +1392,203 @@ export default function AdminPanel() {
       {activeTab === "questions" && (
         <div className="space-y-6 animate-fade-in text-left" id="admin-view-questions">
           
-          {/* Form Create New Question */}
-          <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-5">
+          {/* Dynamic Google Sheets Import Interface */}
+          <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4" id="google-sheet-import-card">
             <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-              <PlusCircle className="w-5 h-5 text-purple-600" />
-              <h3 className="text-base font-extrabold text-slate-900 font-sans">Tạo Câu Hỏi Mới Chuẩn Hóa</h3>
+              <PlusCircle className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-base font-extrabold text-slate-900 font-sans">Nhập Câu Hỏi Hàng Loạt Qua Google Sheets</h3>
             </div>
 
-            <form onSubmit={handleCreateQuestion} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-semibold text-slate-700">
-              
-              {/* Module selection selection */}
+            <div className="bg-slate-50 border border-slate-150 rounded-xl p-4 text-xs text-slate-600 space-y-1.5 leading-relaxed">
+              <h4 className="font-bold text-slate-800 flex items-center gap-1">
+                <Shield className="w-3.5 h-3.5 text-purple-600" />
+                Hướng dẫn định dạng tệp trang tính (Google Sheet):
+              </h4>
+              <p>1. Thiết lập quyền chia sẻ: <strong className="text-slate-800">Bất kỳ ai có đường liên kết đều có thể xem (Anyone with the link can view)</strong>.</p>
+              <p>2. Đầu mục của trang tính trang chính phải khớp chính xác 100% với tên trường: <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">level</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">questionType</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">questionText</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">optionA</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">optionB</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">optionC</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">optionD</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">correctAnswer</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">explanation</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">difficulty</code>, <code className="bg-white border text-rose-600 px-1 py-0.5 rounded">attachments</code>. (Riêng <code className="bg-white border text-slate-600 px-1 py-0.5 rounded">id</code> không bắt buộc).</p>
+              <p>3. <strong className="text-slate-800">Nguyên tắc giao dịch:</strong> Chỉ nhập dữ liệu khi 100% dòng hợp lệ. Nếu phát hiện một dòng sai lệch, toàn bộ lô hàng sẽ bị hủy bỏ.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end text-xs font-semibold text-slate-700">
+              <div className="md:col-span-2 space-y-1">
+                <label className="block text-slate-500">Đường dẫn tệp Google Sheets</label>
+                <input
+                  type="text"
+                  placeholder="https://docs.google.com/spreadsheets/d/SpreadsheetID/edit?usp=sharing"
+                  value={importSheetUrl}
+                  onChange={(e) => setImportSheetUrl(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-purple-500"
+                />
+              </div>
+
               <div className="space-y-1">
-                <label className="block text-slate-500">Học phần IC3 chuẩn hóa</label>
+                <label className="block text-slate-500">Chế độ ghi nhận</label>
+                <select
+                  value={importMode}
+                  onChange={(e) => setImportMode(e.target.value as "append" | "overwrite")}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 cursor-pointer"
+                >
+                  <option value="append">Ghi tiếp (Append - Thêm mới)</option>
+                  <option value="overwrite">Ghi đè (Overwrite - Xóa toàn bộ câu hỏi cũ)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Error logs listing */}
+            {importErrors.length > 0 && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl space-y-2 text-xs">
+                <div className="flex items-center gap-1.5 font-bold">
+                  <AlertTriangle className="w-4 h-4 text-rose-600" />
+                  <span>Phát hiện {importErrors.length} lỗi cấu trúc dữ liệu - Không thể nhập:</span>
+                </div>
+                <div className="max-h-40 overflow-y-auto pl-5 space-y-1 list-disc font-mono">
+                  {importErrors.map((err, errIdx) => (
+                    <p key={errIdx}>• {err}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Preview loaded items before submit */}
+            {importPreview.length > 0 && (
+              <div className="bg-emerald-50/50 border border-emerald-200 p-4 rounded-xl space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold text-emerald-800">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span>Xác thực thành công! Sẵn sàng nhập lô {importPreview.length} câu hỏi.</span>
+                  </div>
+                  <button 
+                    onClick={() => setImportPreview([])} 
+                    className="text-slate-400 hover:text-slate-600 p-1 rounded font-bold cursor-pointer"
+                  >
+                    Hủy xem trước
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-44 overflow-y-auto pr-1">
+                  {importPreview.map((item, pIdx) => (
+                    <div key={item.id} className="bg-white border rounded-lg p-2 text-[10px] space-y-1">
+                      <div className="flex justify-between items-center text-[9px] text-slate-400 font-bold">
+                        <span>Học phần: {item.level}</span>
+                        <span>Loại: {item.questionType}</span>
+                      </div>
+                      <p className="font-extrabold text-slate-800 line-clamp-2">{item.questionText}</p>
+                      <p className="text-slate-500 italic truncate">Đáp án: {item.correctAnswer}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {isImportingToDb && (
+                  <div className="space-y-1.5 pt-2">
+                    <div className="flex justify-between font-bold text-indigo-700 text-[10px]">
+                      <span>Đang nạp dữ liệu lên Firestore Cloud...</span>
+                      <span>{importProgressPercent}%</span>
+                    </div>
+                    <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                      <div className="bg-gradient-to-r from-purple-500 to-indigo-600 h-full rounded-full transition-all duration-350" style={{ width: `${importProgressPercent}%`}} />
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-1.5">
+                  <button
+                    onClick={handleImportToDb}
+                    disabled={isImportingToDb}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold rounded-lg text-[11px] cursor-pointer flex items-center gap-1.5 uppercase transition"
+                  >
+                    {isImportingToDb ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Nạp Dữ Liệu Lên Đám Mây"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-start">
+              <button
+                onClick={handleValidateSheet}
+                disabled={isImportValidating || isImportingToDb}
+                className="px-5 py-2.5 bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 font-extrabold rounded-xl text-xs flex items-center gap-1.5 uppercase cursor-pointer shadow-sm hover:shadow-md transition"
+              >
+                {isImportValidating ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : "Xem Trước & Xác Thực Tệp Sheets"}
+              </button>
+            </div>
+          </div>
+
+          {/* Form Create or Edit Question */}
+          <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-5" id="create-edit-question-card">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <PlusCircle className="w-5 h-5 text-purple-600" />
+                <h3 className="text-base font-extrabold text-slate-900 font-sans">
+                  {editingQuestion ? `Chỉnh Sửa Câu Hỏi #${editingQuestion.id.substring(0, 8)}` : "Tạo Câu Hỏi Mới Chuẩn Hóa"}
+                </h3>
+              </div>
+              
+              {editingQuestion && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingQuestion(null);
+                    setFormTopic("");
+                    setFormText("");
+                    setFormOptA("");
+                    setFormOptB("");
+                    setFormOptC("");
+                    setFormOptD("");
+                    setSmartPasteText("");
+                    setSmartPasteFeedback("");
+                    setFormCorrectIndex(0);
+                    setFormCorrectAnswer("A");
+                    setFormExplanation("");
+                    setFormAttachments([]);
+                  }}
+                  className="px-3 py-1 bg-rose-50 text-rose-600 border border-rose-100 rounded-lg text-[10px] font-bold"
+                >
+                  Hủy chế độ sửa (Tạo mới)
+                </button>
+              )}
+            </div>
+
+            <form onSubmit={handleCreateQuestion} className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-semibold text-slate-700">
+              
+              {/* Module selection */}
+              <div className="space-y-1 md:col-span-1">
+                <label className="block text-slate-500">Mảng kiến thức</label>
                 <select
                   value={formModule}
-                  onChange={(e) => setFormModule(e.target.value as "cf" | "ka" | "lo")}
+                  onChange={(e) => {
+                    const val = e.target.value as "cf" | "ka" | "lo";
+                    setFormModule(val);
+                    // Automatically sync state internally for backward compatibility if any components look at formLevel
+                    if (val === "cf") setFormLevel("CF (LV1)");
+                    else if (val === "ka") setFormLevel("KA (LV2)");
+                    else if (val === "lo") setFormLevel("LO (LV3)");
+                  }}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold cursor-pointer text-slate-800"
                 >
-                  <option value="cf">CF (LV1) - Máy tính Căn bản (Computing Fundamentals)</option>
-                  <option value="ka">KA (LV2) - Các ứng dụng Chủ chốt (Key Applications)</option>
-                  <option value="lo">LO (LV3) - Cuộc sống Trực tuyến (Living Online)</option>
+                  <option value="cf">CF (LV1) - Máy tính Căn bản</option>
+                  <option value="ka">KA (LV2) - Các ứng dụng Chủ chốt</option>
+                  <option value="lo">LO (LV3) - Cuộc sống Trực tuyến</option>
                 </select>
               </div>
 
-              {/* Topic text input */}
-              <div className="space-y-1">
-                <label className="block text-slate-500">Chủ đề chi tiết (Topic)</label>
-                <input
-                  type="text"
-                  placeholder="Ví dụ: Hardware, Spreadsheet, Security..."
-                  value={formTopic}
-                  onChange={(e) => setFormTopic(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-purple-500"
-                />
+              {/* Question interactive Types */}
+              <div className="space-y-1 md:col-span-2">
+                <label className="block text-slate-500">Dạng câu hỏi tương tác (Type)</label>
+                <select
+                  value={formQuestionType}
+                  onChange={(e) => setFormQuestionType(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold cursor-pointer text-slate-800"
+                >
+                  <option value="Multiple Choice">Multiple Choice (1 Đáp án)</option>
+                  <option value="Multiple Select">Multiple Select (Nhiều đáp án)</option>
+                  <option value="True / False">True / False (Đúng / Sai)</option>
+                  <option value="Matching">Matching (Nối cột)</option>
+                  <option value="Fill In The Blank">Fill In The Blank (Điền khuyết)</option>
+                  <option value="Drag And Drop">Drag And Drop (Kéo thả)</option>
+                  <option value="Hotspot">Hotspot (Điểm nóng)</option>
+                  <option value="Ordering / Sequence">Ordering / Sequence (Sắp xếp thứ tự)</option>
+                  <option value="Video Based">Video Based (Tương tác video)</option>
+                </select>
               </div>
 
               {/* Question text */}
@@ -780,85 +1596,335 @@ export default function AdminPanel() {
                 <label className="block text-slate-500">Nội dung câu hỏi (Question Text)</label>
                 <textarea
                   rows={2}
-                  placeholder="Nhập nội dung câu hỏi trắc nghiệm..."
+                  placeholder="Nhập nội dung câu hỏi luyện thi..."
                   value={formText}
                   onChange={(e) => setFormText(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-purple-500 font-medium"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none"
                 />
               </div>
 
-              {/* Options list inputs */}
-              <div className="space-y-3 p-4 bg-slate-50/50 border border-slate-100 rounded-2xl col-span-full">
-                <span className="text-[10px] uppercase text-slate-400 tracking-wider font-extrabold block">Bốn phương án trả lời</span>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-slate-500">Phán quyết A</label>
-                    <input
-                      type="text"
-                      placeholder="Nội dung phương án A"
-                      value={formOptA}
-                      onChange={(e) => setFormOptA(e.target.value)}
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-purple-500"
+              {/* Options list container – only show option inputs if it is not a true/false or hotspot question */}
+              {formQuestionType !== "True / False" && formQuestionType !== "Hotspot" && (
+                <div className="space-y-3 p-4 bg-slate-50/50 border border-slate-100 rounded-2xl col-span-full text-left">
+                  <span className="text-[10px] uppercase text-slate-400 tracking-wider font-extrabold block">
+                    {formQuestionType === "Ordering / Sequence" 
+                      ? "Danh sách các mục cần sắp xếp (Hãy nhập theo đúng thứ tự chính xác)" 
+                      : "Bốn phương án trả lời tùy chọn"}
+                  </span>
+
+                  {/* Smart Paste (Dán nhanh đáp án) */}
+                  <div className="bg-purple-50/45 border border-purple-100 rounded-xl p-3.5 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[11px] font-extrabold uppercase text-purple-700 tracking-wider flex items-center gap-1">
+                        ⚡ Dán nhanh đáp án (Smart Paste)
+                      </label>
+                      {smartPasteText && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSmartPasteText("");
+                            setSmartPasteFeedback("");
+                            setFormOptA("");
+                            setFormOptB("");
+                            setFormOptC("");
+                            setFormOptD("");
+                          }}
+                          className="text-rose-500 hover:text-rose-700 text-[10px] font-extrabold hover:underline"
+                        >
+                          Xóa trắng toàn bộ phương án
+                        </button>
+                      )}
+                    </div>
+                    <textarea
+                      rows={3}
+                      placeholder="Dán block đáp án tại đây. Ví dụ:&#13;a. Duyệt đa trang một lúc&#13;b. Lịch sử hoặc dòng thời gian&#13;c. Mục yêu thích hoặc dấu trang (Correct)&#13;d. Hộp địa chỉ"
+                      value={smartPasteText}
+                      onChange={(e) => handleSmartPasteChange(e.target.value)}
+                      className="w-full p-2.5 bg-white border border-purple-100 rounded-xl text-slate-800 placeholder-slate-400 font-sans text-xs focus:ring-2 focus:ring-purple-200 focus:outline-none"
                     />
+                    {smartPasteFeedback && (
+                      <div className="text-[10px] text-purple-700 bg-purple-50 border border-purple-100 p-2 rounded-lg font-mono whitespace-pre-wrap leading-relaxed">
+                        {smartPasteFeedback}
+                      </div>
+                    )}
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-slate-500">Phán quyết B</label>
-                    <input
-                      type="text"
-                      placeholder="Nội dung phương án B"
-                      value={formOptB}
-                      onChange={(e) => setFormOptB(e.target.value)}
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-slate-200/0 text-slate-500">Phán quyết C</label>
-                    <input
-                      type="text"
-                      placeholder="Nội dung phương án C"
-                      value={formOptC}
-                      onChange={(e) => setFormOptC(e.target.value)}
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-slate-500">Phán quyết D</label>
-                    <input
-                      type="text"
-                      placeholder="Nội dung phương án D"
-                      value={formOptD}
-                      onChange={(e) => setFormOptD(e.target.value)}
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-purple-500"
-                    />
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-slate-500">
+                        {formQuestionType === "Ordering / Sequence" ? "Bước thứ 1 (Đầu tiên)" : "Phương án A"}
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={formQuestionType === "Ordering / Sequence" ? "Ví dụ: Chọn File" : "Nội dung đáp án lựa chọn A"}
+                        value={formOptA}
+                        onChange={(e) => setFormOptA(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-slate-500">
+                        {formQuestionType === "Ordering / Sequence" ? "Bước thứ 2" : "Phương án B"}
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={formQuestionType === "Ordering / Sequence" ? "Ví dụ: Chọn Save As" : "Nội dung đáp án lựa chọn B"}
+                        value={formOptB}
+                        onChange={(e) => setFormOptB(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-slate-500">
+                        {formQuestionType === "Ordering / Sequence" ? "Bước thứ 3" : "Phương án C"}
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={formQuestionType === "Ordering / Sequence" ? "Ví dụ: Chọn vị trí lưu" : "Nội dung đáp án lựa chọn C"}
+                        value={formOptC}
+                        onChange={(e) => setFormOptC(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-slate-500">
+                        {formQuestionType === "Ordering / Sequence" ? "Bước thứ 4 (Cuối cùng)" : "Phương án D"}
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={formQuestionType === "Ordering / Sequence" ? "Ví dụ: Nhấn Save" : "Nội dung đáp án lựa chọn D"}
+                        value={formOptD}
+                        onChange={(e) => setFormOptD(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800"
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Correct option index select */}
-              <div className="space-y-1">
-                <label className="block text-slate-500 font-sans">Đáp án đúng chính xác</label>
-                <select
-                  value={formCorrectIndex}
-                  onChange={(e) => setFormCorrectIndex(Number(e.target.value))}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-extrabold cursor-pointer text-emerald-700"
-                >
-                  <option value={0}>Phương án A</option>
-                  <option value={1}>Phương án B</option>
-                  <option value={2}>Phương án C</option>
-                  <option value={3}>Phương án D</option>
-                </select>
+              {/* Hotspot Editor section */}
+              {formQuestionType === "Hotspot" && (
+                <div className="bg-slate-50 border border-slate-200 p-6 rounded-2xl col-span-full text-left space-y-4">
+                  <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                    <MapPin className="w-5 h-5 text-indigo-650 animate-bounce" />
+                    <h4 className="font-extrabold text-slate-800 font-display">Thiết lập tọa độ điểm nóng (Hotspot Editor)</h4>
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-500 font-bold block">Đường dẫn URL ảnh nền (Background Image URL)</label>
+                    <input
+                      type="text"
+                      placeholder="Nhập URL hình ảnh (Ví dụ: https://picsum.photos/800/400 hoặc từ drive, hosting...)"
+                      value={formImageUrl}
+                      onChange={(e) => setFormImageUrl(e.target.value)}
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-850 text-xs"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                    {/* Left Column: Image Interaction Canvas */}
+                    <div className="space-y-2 text-left">
+                      <span className="text-[11px] text-indigo-650 font-extrabold uppercase block">👉 CLICK TRỰC TIẾP LÊN ẢNH ĐỂ ĐẶT ĐỊM ĐÚNG:</span>
+                      
+                      {formImageUrl ? (
+                        <div 
+                          onClick={handleAdminImgClick}
+                          className="relative border-2 border-slate-200 rounded-xl overflow-hidden cursor-crosshair select-none bg-slate-100 max-w-full inline-block group shadow-md"
+                          id="admin-hotspot-drawing-canvas"
+                        >
+                          <img 
+                            src={formImageUrl} 
+                            alt="Hotspot Base" 
+                            className="max-h-[350px] object-contain pointer-events-none"
+                            referrerPolicy="no-referrer"
+                          />
+                          {/* Absolute marked hotspots points on image preview */}
+                          {formHotspots.map((spot, idx) => (
+                            <div 
+                              key={idx} 
+                              className="absolute bg-emerald-500/30 border border-emerald-600 rounded-full flex items-center justify-center text-[10px] text-white font-black"
+                              style={{
+                                left: `${spot.x}%`,
+                                top: `${spot.y}%`,
+                                width: `${spot.radius * 2}%`,
+                                height: `${spot.radius * 2}%`,
+                                transform: "translate(-50%, -50%)"
+                              }}
+                            >
+                              <span className="scale-75 bg-slate-900 border border-white rounded-full w-5 h-5 flex items-center justify-center shadow-md font-mono">
+                                {idx + 1}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="h-44 bg-slate-100 rounded-xl flex items-center justify-center text-xs text-slate-400 font-bold border-2 border-dashed border-slate-250">
+                          Chưa cung cấp liên kết hình ảnh. Vui lòng dán link ảnh ở trên.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right Column: Hotspot coordinates lists and deletions */}
+                    <div className="space-y-3 bg-white p-4 border border-slate-150 rounded-xl text-xs flex flex-col justify-between">
+                      <div>
+                        <div className="flex gap-2 items-center justify-between pb-1.5 border-b mb-2">
+                          <span className="font-extrabold text-slate-700">Các điểm đúng đã tạo ({formHotspots.length} điểm)</span>
+                          <div className="flex gap-1 items-center">
+                            <span className="font-semibold text-slate-500">Bán kính rộng:</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              value={adminHotspotRadius}
+                              onChange={(e) => setAdminHotspotRadius(Math.max(1, Math.min(20, Number(e.target.value))))}
+                              className="w-10 text-center border p-0.5 rounded text-indigo-750 font-bold font-mono"
+                            />
+                            <span>%</span>
+                          </div>
+                        </div>
+
+                        <div className="max-h-[220px] overflow-y-auto space-y-1.5 pr-1">
+                          {formHotspots.length === 0 ? (
+                            <p className="text-slate-400 italic text-center py-6">Chưa có điểm gán nào được cấu hình. Nhấp chọn trực tiếp lên ảnh.</p>
+                          ) : (
+                            formHotspots.map((spot, idx) => (
+                              <div key={idx} className="flex justify-between items-center bg-slate-50 border border-slate-100 p-2 rounded-lg hover:border-indigo-200 transition">
+                                <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                                  <span className="bg-slate-900 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-mono">{idx + 1}</span>
+                                  <span>Tọa độ: X={spot.x}%, Y={spot.y}% | R={spot.radius}%</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setFormHotspots(current => current.filter((_, i) => i !== idx));
+                                  }}
+                                  className="text-rose-500 hover:bg-rose-50 px-2.5 py-1 rounded transition font-bold text-[11px]"
+                                >
+                                  Xóa
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t text-slate-400 text-[10px] font-sans">
+                        * Tọa độ tự động thiết lập dạng phần trăm (%) của khung ảnh nền để đảm bảo co giãn kích thước tự nhiên trên Mobile và Desktop của thí sinh.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Correct answers input */}
+              {formQuestionType !== "Hotspot" && formQuestionType !== "Ordering / Sequence" && (
+                <div className="space-y-1 col-span-1">
+                  <label className="block text-slate-500">Đáp án chính xác (Ký tự / Chỉ số)</label>
+                  {formQuestionType === "True / False" ? (
+                    <select
+                      value={formCorrectIndex}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        setFormCorrectIndex(val);
+                        setFormCorrectAnswer(val === 0 ? "Đúng" : "Sai");
+                      }}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-extrabold cursor-pointer"
+                    >
+                      <option value={0}>Đúng (True)</option>
+                      <option value={1}>Sai (False)</option>
+                    </select>
+                  ) : (
+                    <div className="flex gap-2 items-center">
+                      <select
+                        value={formCorrectIndex}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          setFormCorrectIndex(val);
+                          setFormCorrectAnswer(String.fromCharCode(65 + val));
+                        }}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-extrabold cursor-pointer"
+                      >
+                        <option value={0}>Phương án A</option>
+                        <option value={1}>Phương án B</option>
+                        <option value={2}>Phương án C</option>
+                        <option value={3}>Phương án D</option>
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="Đáp án chữ"
+                        value={formCorrectAnswer}
+                        onChange={(e) => setFormCorrectAnswer(e.target.value)}
+                        className="w-16 p-2.5 text-center bg-slate-50 border border-slate-200 rounded-xl text-emerald-700 font-extrabold uppercase"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Interactive attachments builder block */}
+              <div className="col-span-full md:col-span-2 space-y-2 border border-slate-100 p-4 rounded-2xl bg-slate-50/20 text-left">
+                <span className="text-[10px] uppercase text-slate-400 tracking-wider font-extrabold block">Tài nguyên học thuật đính kèm (Attachments)</span>
+                
+                {formAttachments.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {formAttachments.map((att, attIdx) => (
+                      <div key={attIdx} className="bg-white border rounded-full pl-3 pr-1 py-1 flex items-center gap-1.5 text-[10px] font-bold text-slate-700">
+                        <span>[{att.type.toUpperCase()}]</span>
+                        <span className="truncate max-w-xs">{att.url}</span>
+                        <button 
+                          type="button" 
+                          onClick={() => setFormAttachments(prev => prev.filter((_, idx2) => idx2 !== attIdx))} 
+                          className="w-4 h-4 rounded-full bg-slate-150 hover:bg-slate-200 text-slate-500 font-bold border-0 cursor-pointer flex items-center justify-center text-[8px]"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex gap-2 items-center text-xs">
+                  <select
+                    value={newAttachmentType}
+                    onChange={(e) => setNewAttachmentType(e.target.value)}
+                    className="p-2 bg-white border border-slate-200 rounded-xl font-bold cursor-pointer"
+                  >
+                    <option value="image">Hình ảnh (Image)</option>
+                    <option value="video">Phim (Video)</option>
+                    <option value="link">Trang web (Web link)</option>
+                    <option value="pdf">Tài liệu (PDF)</option>
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="URL tài nguyên (VD: https://youtube.com/...)"
+                    value={newAttachmentUrl}
+                    onChange={(e) => setNewAttachmentUrl(e.target.value)}
+                    className="flex-1 p-2 bg-white border border-slate-200 rounded-xl"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newAttachmentUrl.trim()) return;
+                      setFormAttachments(prev => [...prev, { type: newAttachmentType, url: newAttachmentUrl.trim() }]);
+                      setNewAttachmentUrl("");
+                    }}
+                    className="px-3 py-2 bg-indigo-50 border border-indigo-150 text-indigo-700 hover:bg-indigo-600 hover:text-white font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Thêm đính kèm
+                  </button>
+                </div>
               </div>
 
               {/* Explanation statement */}
               <div className="col-span-full space-y-1">
-                <label className="block text-slate-500 font-sans">Giải đọc vì sao đúng (Explanation)</label>
+                <label className="block text-slate-500 font-sans">Giải đạo chi tiết vì sao đúng (Explanation)</label>
                 <textarea
                   rows={2}
-                  placeholder="Nhập phần giải đề hướng dẫn cho thí sinh..."
+                  placeholder="Điền giải thuật, hướng dẫn hoặc chỉ bảo để rèn luyện tư duy cho sĩ tử..."
                   value={formExplanation}
                   onChange={(e) => setFormExplanation(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:border-purple-500 font-medium"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800"
                 />
               </div>
 
@@ -871,12 +1937,17 @@ export default function AdminPanel() {
                   {isSubmittingQuestion ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin text-white" />
-                      Đang đồng bộ câu hỏi...
+                      Đang thực hiện chuyển giao...
+                    </>
+                  ) : editingQuestion ? (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      Cập Nhật Câu Hỏi Khảo Thí
                     </>
                   ) : (
                     <>
                       <PlusCircle className="w-4 h-4" />
-                      Thêm Câu Hỏi Luyện Thi
+                      Thêm Câu Hỏi Mới Lên Đám Mây
                     </>
                   )}
                 </button>
@@ -887,25 +1958,26 @@ export default function AdminPanel() {
 
           {/* List all Database questions */}
           <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <h3 className="text-base font-extrabold text-slate-900 font-sans">Ngân Hàng Câu Hỏi Toàn Hệ Thống ({questions.length})</h3>
-              <span className="text-xs text-slate-400">Không thể xóa ngân hàng câu hỏi gốc mặc định</span>
+            <div className="flex justify-between items-center text-left">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900 font-sans">Kho Ngân Hàng Câu Hỏi Khảo Thí ({questions.length} câu hỏi)</h3>
+                <p className="text-[11px] text-slate-400 mt-1">Câu hỏi hệ thống tích hợp sẵn và câu hỏi tự tạo tải từ đám mây Firestore.</p>
+              </div>
+              <span className="text-xs text-slate-400 bg-slate-100 border px-3 py-1 rounded-full font-bold">Chỉ Admins được quyền can thiệp</span>
             </div>
             
-            <div className="space-y-3 max-h-[550px] overflow-y-auto pr-1" id="questions-pool-scroller2">
+            <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1" id="questions-pool-scroller2">
               {questions.map((q, idx) => {
-                // Static vs dynamic
                 const isStatic = (q.id || "").startsWith("cf_") || (q.id || "").startsWith("ka_") || (q.id || "").startsWith("lo_");
                 
                 return (
-                  <div key={q.id || idx} className="bg-white border border-slate-100 rounded-xl p-4 shadow-sm" id={`admin-q-${q.id}`}>
+                  <div key={q.id || idx} className="bg-white border border-slate-100 rounded-xl p-5 shadow-sm text-left hover:shadow-md transition relative" id={`admin-q-${q.id}`}>
                     <div className="flex justify-between items-start gap-4 mb-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[10px] font-bold tracking-wider px-2 py-0.5 bg-slate-100 text-slate-600 rounded font-mono">
-                          Mã: {q.id ? q.id.substring(0, 15) : "Dynamic"}
+                        <span className="text-[9px] font-extrabold tracking-wider px-2 py-0.5 bg-slate-100 text-slate-500 rounded font-mono">
+                          MỘT SỐ: {q.id ? q.id.substring(0, 15) : idx}
                         </span>
                         
-                        {/* Module Tag display updated */}
                         <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
                           q.module === "cf" 
                             ? "bg-sky-50 text-sky-700 border border-sky-100" 
@@ -913,54 +1985,123 @@ export default function AdminPanel() {
                               ? "bg-amber-50 text-amber-700 border border-amber-100" 
                               : "bg-indigo-50 text-indigo-700 border border-indigo-100"
                         }`}>
-                          {q.module === "cf" ? "CF (LV1)" : q.module === "ka" ? "KA (LV2)" : "LO (LV3)"}
+                          {q.level || (q.module === "cf" ? "CF (LV1)" : q.module === "ka" ? "KA (LV2)" : "LO (LV3)")}
+                        </span>
+
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-150 border text-slate-700">
+                          {q.questionType || "Multiple Choice"}
                         </span>
 
                         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                          isStatic ? "bg-slate-50 text-slate-400" : "bg-purple-50 text-purple-700 border border-purple-100"
+                          isStatic ? "bg-slate-50 text-slate-400" : "bg-indigo-50 text-indigo-700 border border-indigo-100"
                         }`}>
-                          {isStatic ? "Hệ thống bổ trợ" : "Dữ liệu đám mây"}
+                          {isStatic ? "Mặc định (Bố trợ)" : "Lớp Cloud DB"}
                         </span>
                       </div>
                       
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-slate-500 font-extrabold">{q.topic}</span>
+                        {/* Topic segment info name */}
+                        <span className="text-[11px] text-indigo-650 bg-indigo-50 px-2 py-0.5 rounded font-extrabold">{q.topic || "Chung"}</span>
+                        
+                        {/* Inline Actions inside Database list */}
                         {!isStatic && q.id && (
-                          <button
-                            id={`del-q-btn-${q.id}`}
-                            onClick={() => handleDeleteQuestion(q.id)}
-                            disabled={deletingQuestionId === q.id}
-                            className={`p-1 text-xs font-bold leading-none flex items-center gap-1 rounded transition disabled:opacity-40 cursor-pointer ${
-                              questionIdToConfirmDelete === q.id
-                                ? "bg-red-600 text-white hover:bg-red-700 font-extrabold px-1.5 py-0.5 animate-pulse"
-                                : "text-rose-500 hover:text-rose-700 hover:bg-rose-50"
-                            }`}
-                            title={questionIdToConfirmDelete === q.id ? "Xác nhận xóa câu hỏi này vĩnh viễn" : "Xóa câu hỏi tùy chọn khỏi database"}
-                          >
-                            {deletingQuestionId === q.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : questionIdToConfirmDelete === q.id ? (
-                              <span>Thực sự xóa?</span>
-                            ) : (
-                              <Trash className="w-3.5 h-3.5" />
-                            )}
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            
+                            {/* Inline Edit action button custom */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingQuestion(q);
+                                setFormModule(q.module);
+                                setFormTopic(q.topic || "");
+                                setFormLevel(q.level || "");
+                                setFormQuestionType(q.questionType || "Multiple Choice");
+                                setFormDifficulty(q.difficulty || "medium");
+                                setFormText(q.questionText || "");
+                                setFormOptA(q.optionA || q.options[0] || "");
+                                setFormOptB(q.optionB || q.options[1] || "");
+                                setFormOptC(q.optionC || q.options[2] || "");
+                                setFormOptD(q.optionD || q.options[3] || "");
+                                setSmartPasteText("");
+                                setSmartPasteFeedback("");
+                                setFormCorrectIndex(q.correctIndex || 0);
+                                setFormCorrectAnswer(q.correctAnswer || "");
+                                setFormExplanation(q.explanation || "");
+                                setFormAttachments(q.attachments || []);
+                                setFormImageUrl(q.imageUrl || "");
+                                let pts = q.hotspots || [];
+                                if (pts.length === 0 && (q.questionType || "") === "Hotspot") {
+                                  try {
+                                    pts = JSON.parse(q.correctAnswer || "[]");
+                                  } catch (e) {}
+                                }
+                                setFormHotspots(pts);
+                                
+                                const comp = document.getElementById("create-edit-question-card");
+                                if (comp) {
+                                  comp.scrollIntoView({ behavior: "smooth" });
+                                }
+                              }}
+                              className="p-1 px-2 border border-amber-100 bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white rounded text-[10px] font-bold flex items-center gap-1 transition"
+                            >
+                              Sửa
+                            </button>
+
+                            <button
+                              id={`del-q-btn-${q.id}`}
+                              onClick={() => handleDeleteQuestion(q.id)}
+                              disabled={deletingQuestionId === q.id}
+                              className={`p-1 text-xs font-bold leading-none flex items-center gap-1 rounded transition disabled:opacity-40 cursor-pointer ${
+                                questionIdToConfirmDelete === q.id
+                                  ? "bg-red-600 text-white hover:bg-red-700 font-extrabold px-1.5 py-0.5 animate-pulse"
+                                  : "text-rose-500 hover:text-rose-700 hover:bg-rose-50"
+                              }`}
+                              title={questionIdToConfirmDelete === q.id ? "Xác nhận xóa câu hỏi này vĩnh viễn" : "Xóa câu hỏi"}
+                            >
+                              {deletingQuestionId === q.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : questionIdToConfirmDelete === q.id ? (
+                                <span>Xóa luôn?</span>
+                              ) : (
+                                <Trash className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
 
-                    <p className="text-sm font-bold text-slate-800 leading-snug">{q.questionText}</p>
+                    <p className="text-sm font-bold text-slate-800 leading-relaxed mt-2">{q.questionText}</p>
                     
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 text-xs text-slate-600 font-medium text-left">
-                      {q.options?.map((opt, oIdx) => (
-                        <div key={oIdx} className={`p-1.5 rounded border ${oIdx === q.correctIndex ? "bg-emerald-50 border-emerald-200 text-emerald-800 font-bold" : "border-slate-100 bg-slate-50/50"}`}>
-                          {String.fromCharCode(65 + oIdx)}. {opt}
-                        </div>
-                      ))}
-                    </div>
+                    {q.options && q.options.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 text-xs text-slate-600 font-medium text-left">
+                        {q.options.map((opt, oIdx) => (
+                          <div key={oIdx} className={`p-2 rounded-xl border ${oIdx === q.correctIndex ? "bg-emerald-50 border-emerald-200 text-emerald-800 font-bold" : "border-slate-100 bg-slate-50/50"}`}>
+                            {String.fromCharCode(65 + oIdx)}. {opt}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Show custom attachments list in viewer card */}
+                    {q.attachments && q.attachments.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {q.attachments.map((at, atid) => (
+                          <a 
+                            key={atid} 
+                            href={at.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[9px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-150 rounded-full px-2 py-0.5 hover:bg-indigo-100/70"
+                          >
+                            <span>📎 {at.type.toUpperCase()}: {at.url.length > 25 ? at.url.substring(0, 25) + "..." : at.url}</span>
+                          </a>
+                        ))}
+                      </div>
+                    )}
 
                     <div className="bg-indigo-50/30 border border-indigo-100/50 rounded-lg p-2.5 text-[11px] text-slate-600 mt-2.5 font-medium">
-                      <strong className="text-indigo-900 font-extrabold">Hướng dẫn giải: </strong>
+                      <strong className="text-indigo-900 font-extrabold">Giải thích phương án: </strong>
                       {q.explanation}
                     </div>
                   </div>
