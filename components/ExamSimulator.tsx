@@ -230,13 +230,17 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
               Câu trước
             </button>
 
-            <button
-              id="submit-exam-trigger"
-              onClick={submitExam}
-              className="px-6 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-bold rounded-lg shadow transition"
-            >
-              Nộp bài thi
-            </button>
+            {currentQuestionIndex === questions.length - 1 ? (
+              <button
+                id="submit-exam-trigger"
+                onClick={submitExam}
+                className="px-6 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-bold rounded-lg shadow transition animate-fade-in"
+              >
+                Nộp bài thi
+              </button>
+            ) : (
+              <div aria-hidden="true" className="w-24 sm:w-28" />
+            )}
 
             <button
               id="next-question-btn"
