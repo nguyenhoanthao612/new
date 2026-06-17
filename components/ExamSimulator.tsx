@@ -22,6 +22,7 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
   const [timeRemaining, setTimeRemaining] = useState(moduleInfo.timeLimit * 60); // in seconds
   const [examStatus, setExamStatus] = useState<"ready" | "testing" | "completed">("ready");
   const [score, setScore] = useState<{ correct: number; total: number; score1000: number; passed: boolean } | null>(null);
+  const [showBlankWarning, setShowBlankWarning] = useState(false);
 
   const currentQuestion = questions[currentQuestionIndex];
 
@@ -233,7 +234,14 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
             {currentQuestionIndex === questions.length - 1 ? (
               <button
                 id="submit-exam-trigger"
-                onClick={submitExam}
+                onClick={() => {
+                  const unanswered = questions.filter((q) => selectedAnswers[q.id] === undefined).length;
+                  if (unanswered > 0) {
+                    setShowBlankWarning(true);
+                  } else {
+                    submitExam();
+                  }
+                }}
                 className="px-6 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-bold rounded-lg shadow transition animate-fade-in"
               >
                 Nộp bài thi
@@ -357,6 +365,50 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* WARNING BLANK QUESTIONS MODAL */}
+      {showBlankWarning && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in" id="blank-warning-modal-simulation">
+          <div className="bg-slate-950 border border-rose-500/30 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl space-y-6 text-left">
+            <div className="flex items-center gap-3 border-b border-rose-950/45 pb-4">
+              <div className="p-2.5 bg-rose-500/10 text-rose-500 rounded-xl">
+                <AlertTriangle className="w-6 h-6 shrink-0" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-white">Chưa Hoàn Tất Bài Thi</h3>
+                <p className="text-[11px] text-rose-400/80 font-mono">WARNING: BLANK QUESTIONS DETECTED</p>
+              </div>
+            </div>
+
+            <div className="space-y-3.5 text-xs text-slate-300 font-semibold bg-slate-900/60 p-4.5 rounded-2xl border border-slate-850">
+              <p className="text-slate-200">
+                Bạn không thể nộp bài thi thử vì có câu hỏi bỏ trống chưa được hoàn thiện. Vui lòng kiểm tra lại.
+              </p>
+              <div className="flex justify-between items-center pb-2 border-b border-slate-800/60">
+                <span>Tổng số câu hỏi:</span>
+                <span className="font-bold text-white">{questions.length} câu</span>
+              </div>
+              <div className="flex justify-between items-center pb-2 border-b border-slate-800/60">
+                <span>Số câu đã làm:</span>
+                <span className="font-semibold text-emerald-400">{Object.keys(selectedAnswers).length} câu</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-rose-400">Số câu bỏ trống:</span>
+                <span className="font-black text-rose-500 font-mono text-sm">{questions.length - Object.keys(selectedAnswers).length} câu</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowBlankWarning(false)}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl text-xs transition shadow-lg cursor-pointer flex items-center gap-1.5"
+              >
+                Tiếp tục làm bài
+              </button>
+            </div>
           </div>
         </div>
       )}

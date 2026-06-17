@@ -83,6 +83,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
   // Shared state helpers
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [showNoQuestionsModal, setShowNoQuestionsModal] = useState(false);
+  const [showAnswersWarning, setShowAnswersWarning] = useState(false);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -329,7 +330,12 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
 
   // Confirm manual submission trigger
   const handleManualSubmitTest = () => {
-    setShowSubmitModal(true);
+    const unansweredCount = sessionQuestions.length - Object.keys(testAnswers).length;
+    if (unansweredCount > 0) {
+      setShowAnswersWarning(true);
+    } else {
+      setShowSubmitModal(true);
+    }
   };
 
   // Leave session safely
@@ -1248,6 +1254,50 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
               >
                 <Check className="w-4 h-4 shrink-0" />
                 Nộp bài thi & Chấm điểm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WARNING BLANK QUESTIONS MODAL FOR TESTING */}
+      {showAnswersWarning && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in" id="answers-warning-dialog">
+          <div className="bg-white rounded-3xl border border-slate-100 p-6 md:p-8 max-w-md w-full shadow-2xl space-y-6 text-left">
+            <div className="flex items-center gap-3 border-b border-rose-100 pb-4">
+              <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl">
+                <AlertTriangle className="w-6 h-6 shrink-0" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-slate-950">Chưa Hoàn Tất Bài Thi</h3>
+                <p className="text-[11px] text-rose-500 font-mono">WARNING: BLANK QUESTIONS DETECTED</p>
+              </div>
+            </div>
+
+            <div className="space-y-3.5 text-xs text-slate-600 font-semibold bg-slate-50 p-4.5 rounded-2xl border border-slate-150">
+              <p className="text-slate-550 text-slate-500 leading-relaxed">
+                Bạn không thể nộp bài thi thử vì có câu hỏi bỏ trống chưa được hoàn thiện. Vui lòng kiểm tra lại.
+              </p>
+              <div className="flex justify-between items-center pb-2 border-b border-slate-200/60">
+                <span>Tổng số câu hỏi:</span>
+                <span className="font-bold text-slate-900">{sessionQuestions.length} câu</span>
+              </div>
+              <div className="flex justify-between items-center pb-2 border-b border-slate-200/60">
+                <span>Số câu đã làm:</span>
+                <span className="font-semibold text-emerald-600">{Object.keys(testAnswers).length} câu</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-rose-550 text-rose-500">Số câu bỏ trống:</span>
+                <span className="font-black text-rose-600 font-mono text-sm">{sessionQuestions.length - Object.keys(testAnswers).length} câu</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowAnswersWarning(false)}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl text-xs transition shadow-lg cursor-pointer flex items-center gap-1.5"
+              >
+                Tiếp tục làm bài
               </button>
             </div>
           </div>
