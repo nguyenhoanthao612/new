@@ -20,6 +20,19 @@ export interface IC3Question {
   imageUrl?: string;
   hotspots?: Array<{ x: number; y: number; radius: number }>;
   correctSequence?: string[];
+  testSetId?: string; // Links this question to a specific test set
+}
+
+export interface TestSet {
+  id: string;
+  title: string;
+  description?: string;
+  level: "cf" | "ka" | "lo";
+  duration: number; // in minutes
+  passingScore: number; // passing score (e.g., 700)
+  questionCount?: number;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface UserProgress {
@@ -42,6 +55,8 @@ export interface ExamRecord {
   timeSpent: number; // in seconds
   passed: boolean;
   createdAt: number;
+  testSetId?: string;
+  testSetTitle?: string;
 }
 
 export interface Classroom {

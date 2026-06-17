@@ -31,6 +31,7 @@ import {
 
 interface PracticeModuleProps {
   onBackToHome: () => void;
+  onStartExam?: (module: "cf" | "ka" | "lo", testSetId: string) => void;
 }
 
 interface SessionQuestion {
@@ -42,8 +43,8 @@ interface SessionQuestion {
   correctIndexInShuffled: number;
 }
 
-export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
-  const { questions, saveExamResult } = useIC3();
+export default function PracticeModule({ onBackToHome, onStartExam }: PracticeModuleProps) {
+  const { questions, saveExamResult, testSets, examRecords } = useIC3();
 
   // 3 Primary Modes: "training" | "testing" | "race"
   const [activeTab, setActiveTab] = useState<"training" | "testing" | "race">("training");
@@ -53,6 +54,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
 
   // Portal session configurations
   const [selectedModule, setSelectedModule] = useState<"cf" | "ka" | "lo" | null>(null);
+  const [selectedTestSetId, setSelectedTestSetId] = useState<string | null>(null);
   const [sessionMode, setSessionMode] = useState<"training" | "testing" | "race" | null>(null);
   const [sessionQuestions, setSessionQuestions] = useState<SessionQuestion[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -75,6 +77,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
     percentRate: number;
     moduleName: string;
     moduleId: "cf" | "ka" | "lo";
+    testSetId?: string | null;
   } | null>(null);
 
   // C. Race Mode States
@@ -124,8 +127,9 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
   }, [isTestActive, selectedModule, sessionMode, testResult, raceCompleted, testTimeLeft]);
 
   // Unified session starting handler
-  const handleStartSession = (moduleId: "cf" | "ka" | "lo", mode: "training" | "testing" | "race") => {
-    const rawList = questions.filter((q) => q.module === moduleId);
+  const handleStartSession = (moduleId: "cf" | "ka" | "lo", mode: "training" | "testing" | "race", testSetId?: string) => {
+    const targetTestSetId = testSetId || `default_${moduleId}`;
+    const rawList = questions.filter((q) => q.testSetId === targetTestSetId);
     if (rawList.length === 0) {
       setShowNoQuestionsModal(true);
       return;
@@ -163,6 +167,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
     // Set shared state definitions
     setSessionQuestions(preparedQuestions);
     setSelectedModule(moduleId);
+    setSelectedTestSetId(testSetId || null);
     setSessionMode(mode);
     setCurrentQuestionIndex(0);
     setChosenOptionIndex(null);
@@ -267,7 +272,8 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
 
     // Re-shuffle the options for the race questions to provide a dynamic challenge
     if (selectedModule) {
-      const rawList = questions.filter((q) => q.module === selectedModule);
+      const targetTestSetId = selectedTestSetId || `default_${selectedModule}`;
+      const rawList = questions.filter((q) => q.testSetId === targetTestSetId);
       const rePrepared: SessionQuestion[] = rawList.map((q) => {
         const pairs = q.options.map((opt, oIdx) => ({ opt, originalIdx: oIdx }));
         for (let i = pairs.length - 1; i > 0; i--) {
@@ -292,7 +298,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
   // Restart training module back to start
   const handleRestartTrainingSession = () => {
     if (selectedModule) {
-      handleStartSession(selectedModule, "training");
+      handleStartSession(selectedModule, "training", selectedTestSetId || undefined);
     }
   };
 
@@ -363,7 +369,16 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
     const activeModInfo = IC3_MODULES.find((m) => m.id === selectedModule);
 
     // Save exam result standard database format 
-    saveExamResult(selectedModule, correct, total, 50 * 60 - testTimeLeft);
+    saveExamResult(
+      selectedModule, 
+      correct, 
+      total, 
+      50 * 60 - testTimeLeft, 
+      selectedTestSetId || `default_${selectedModule}`,
+      selectedTestSetId 
+        ? (testSets.find(t => t.id === selectedTestSetId)?.title || "Bài Ôn Tập") 
+        : activeModInfo?.name
+    );
 
     setTestResult({
       correctCount: correct,
@@ -371,7 +386,10 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
       scoreVal,
       percentRate,
       moduleId: selectedModule,
-      moduleName: activeModInfo?.name || "IC3 Module"
+      moduleName: selectedTestSetId && selectedTestSetId !== `default_${selectedModule}`
+        ? (testSets.find((t) => t.id === selectedTestSetId)?.title || activeModInfo?.name || "IC3 Module")
+        : (activeModInfo?.name || "IC3 Module"),
+      testSetId: selectedTestSetId
     });
     setIsTestActive(false);
     if (timerRef.current) clearInterval(timerRef.current);
@@ -390,6 +408,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
   // Leave session safely
   const handleExitSession = () => {
     setSelectedModule(null);
+    setSelectedTestSetId(null);
     setSessionMode(null);
     setIsTestActive(false);
     setTestResult(null);
@@ -607,86 +626,195 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
             </div>
           </div>
 
-          {/* Cards distribution grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in" id="selection-distribution-cards">
+          {/* Cards distribution horizontal groups */}
+          <div className="space-y-10 animate-fade-in" id="selection-distribution-groups">
             {IC3_MODULES
               .filter((mod) => quickFilter === "all" || mod.id === quickFilter)
               .map((mod) => {
                 const style = getLevelStyles(mod.id);
                 const countOfQ = questions.filter(q => q.module === mod.id).length;
-                
-                return (
-                  <div
-                    key={mod.id}
-                    className={`border rounded-2xl p-5 md:p-6 bg-white transition flex flex-col justify-between ${style.border}`}
-                  >
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                        {getLevelBadge(mod.id)}
-                        <span className="text-[10px] text-slate-400 font-extrabold font-mono bg-slate-50 px-2 py-0.5 rounded">
-                          {countOfQ} câu hỏi
-                        </span>
-                      </div>
+                const levelCustomSets = (testSets || []).filter((ts) => ts.level === mod.id && !ts.id.startsWith("default_"));
 
-                      <div className="space-y-1.5 text-left">
-                        <h4 className="font-extrabold font-display text-slate-900 text-base leading-snug">
-                          {mod.name.replace(/^[^-]+-\s*/, "")}
-                        </h4>
-                        <p className="text-slate-500 text-xs leading-relaxed min-h-[48px] line-clamp-3">
-                          {mod.description}
-                        </p>
+                return (
+                  <div key={mod.id} className="space-y-4 text-left border-b border-slate-100 pb-8 last:border-0 last:pb-0" id={`group-level-${mod.id}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full ${style.dots}`} />
+                        <h3 className="text-base font-black text-slate-800 tracking-tight uppercase">
+                          {mod.id === "cf" 
+                            ? "CẤP ĐỘ 1: MÁY TÍNH CĂN BẢN (Computing Fundamentals - CF)" 
+                            : mod.id === "ka" 
+                            ? "CẤP ĐỘ 2: CÁC ỨNG DỤNG CHỦ CHỐT (Key Applications - KA)" 
+                            : "CẤP ĐỘ 3: CUỘC SỐNG TRỰC TUYẾN (Living Online - LO)"}
+                        </h3>
                       </div>
+                      <span className="text-[11px] font-bold text-slate-400">
+                        {1 + levelCustomSets.length} bài ôn tập
+                      </span>
                     </div>
 
-                    <div className="pt-5 border-t border-slate-50 mt-4">
-                      {activeTab === "training" && (
-                        <div className="space-y-2">
-                          <p className="text-[9px] text-emerald-600 font-semibold flex items-center justify-center gap-0.5">
-                            <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                            Đánh giá ngay, có giải đáp chi tiết
-                          </p>
-                          <button
-                            id={`btn-training-trigger-${mod.id}`}
-                            onClick={() => handleStartSession(mod.id, "training")}
-                            className="w-full py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black border border-emerald-200 rounded-xl text-xs transition shadow-sm cursor-pointer"
-                          >
-                            Bắt đầu Training
-                          </button>
-                        </div>
-                      )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                      {/* 1. Standard module practice card */}
+                      <div
+                        className={`border rounded-2xl p-5 md:p-6 bg-white transition flex flex-col justify-between ${style.border}`}
+                      >
+                        <div className="space-y-4">
+                          <div className="flex justify-between items-center">
+                            {getLevelBadge(mod.id)}
+                            <span className="text-[10px] text-slate-400 font-extrabold font-mono bg-slate-50 px-2 py-0.5 rounded">
+                              {countOfQ} câu hỏi mẫu
+                            </span>
+                          </div>
 
-                      {activeTab === "testing" && (
-                        <div className="space-y-2">
-                          <p className="text-[9px] text-indigo-600 font-semibold flex items-center justify-center gap-0.5">
-                            <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                            Hồi giờ 50 phút - Giả lập chuẩn
-                          </p>
-                          <button
-                            id={`btn-testing-trigger-${mod.id}`}
-                            onClick={() => handleStartSession(mod.id, "testing")}
-                            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
-                          >
-                            <Play className="w-3 px-0.5 h-3 fill-white shrink-0" />
-                            Luyện Đề Testing
-                          </button>
+                          <div className="space-y-1.5">
+                            <h4 className="font-extrabold font-display text-slate-900 text-sm leading-snug">
+                              Bài Luyện Tập Tổng Hợp
+                            </h4>
+                            <p className="text-slate-500 text-xs leading-relaxed min-h-[48px] line-clamp-3">
+                              {mod.description}
+                            </p>
+                          </div>
                         </div>
-                      )}
 
-                      {activeTab === "race" && (
-                        <div className="space-y-2">
-                          <p className="text-[9px] text-rose-600 font-semibold flex items-center justify-center gap-0.5 animate-pulse">
-                            <Flame className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                            Sai một câu là loại trực tiếp!
-                          </p>
-                          <button
-                            id={`btn-race-trigger-${mod.id}`}
-                            onClick={() => handleStartSession(mod.id, "race")}
-                            className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
-                          >
-                            Thử Thách Race
-                          </button>
+                        <div className="pt-5 border-t border-slate-50 mt-4 font-sans">
+                          {activeTab === "training" && (
+                            <div className="space-y-2">
+                              <p className="text-[9px] text-emerald-600 font-semibold flex items-center justify-center gap-0.5">
+                                <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                Đánh giá ngay, có giải đáp chi tiết
+                              </p>
+                              <button
+                                id={`btn-training-trigger-${mod.id}`}
+                                onClick={() => handleStartSession(mod.id, "training")}
+                                className="w-full py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black border border-emerald-200 rounded-xl text-xs transition shadow-sm cursor-pointer"
+                              >
+                                Bắt đầu Training
+                              </button>
+                            </div>
+                          )}
+
+                          {activeTab === "testing" && (
+                            <div className="space-y-2">
+                              <p className="text-[9px] text-indigo-600 font-semibold flex items-center justify-center gap-0.5">
+                                <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                                Hồi giờ 50 phút - Giả lập chuẩn
+                              </p>
+                              <button
+                                id={`btn-testing-trigger-${mod.id}`}
+                                onClick={() => handleStartSession(mod.id, "testing")}
+                                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <Play className="w-3 px-0.5 h-3 fill-white shrink-0" />
+                                Luyện Đề Testing
+                              </button>
+                            </div>
+                          )}
+
+                          {activeTab === "race" && (
+                            <div className="space-y-2">
+                              <p className="text-[9px] text-rose-600 font-semibold flex items-center justify-center gap-0.5 animate-pulse">
+                                <Flame className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                Sai một câu là loại trực tiếp!
+                              </p>
+                              <button
+                                id={`btn-race-trigger-${mod.id}`}
+                                onClick={() => handleStartSession(mod.id, "race")}
+                                className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                Thử Thách Race
+                              </button>
+                            </div>
+                          )}
                         </div>
-                      )}
+                      </div>
+
+                      {/* 2. Custom dynamic testSets from Firestore aligned inside the same group */}
+                      {levelCustomSets.map((ts) => {
+                        const tsQuestionsCount = questions.filter((q) => q.testSetId === ts.id).length;
+                        const testRecords = examRecords.filter((r) => r.testSetId === ts.id);
+                        const bestScore = testRecords.length > 0 ? Math.max(...testRecords.map((r) => r.score)) : null;
+
+                        return (
+                          <div
+                            key={ts.id}
+                            className={`border rounded-2xl p-5 md:p-6 bg-white transition flex flex-col justify-between ${style.border}`}
+                            id={`practice-test-card-${ts.id}`}
+                          >
+                            <div className="space-y-4">
+                              <div className="flex justify-between items-center">
+                                {getLevelBadge(mod.id)}
+                                {bestScore !== null && bestScore >= (ts.passingScore || 700) ? (
+                                  <span className="text-[9px] bg-emerald-50 text-emerald-700 font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5 border border-emerald-100">
+                                    <Check className="w-3 h-3 text-emerald-500" />
+                                    Đã Đạt ({bestScore}đ)
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] text-slate-400 font-extrabold font-mono bg-slate-50 px-2 py-0.5 rounded">
+                                    {tsQuestionsCount} câu hỏi
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="space-y-1.5 text-left">
+                                <h4 className="font-extrabold font-display text-slate-900 text-sm leading-snug line-clamp-1">
+                                  {ts.title}
+                                </h4>
+                                <p className="text-slate-500 text-xs leading-relaxed min-h-[48px] line-clamp-3">
+                                  {ts.description || "Bài ôn tập bám sát thực tế giúp ôn luyện và khắc sâu kiến thức trọng tâm học phần."}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="pt-5 border-t border-slate-50 mt-4 font-sans">
+                              {activeTab === "training" && (
+                                <div className="space-y-2">
+                                  <p className="text-[9px] text-emerald-600 font-semibold flex items-center justify-center gap-0.5">
+                                    <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                    Đánh giá ngay, có giải đáp chi tiết
+                                  </p>
+                                  <button
+                                    onClick={() => handleStartSession(mod.id, "training", ts.id)}
+                                    className="w-full py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black border border-emerald-200 rounded-xl text-xs transition shadow-sm cursor-pointer"
+                                  >
+                                    Bắt đầu Training
+                                  </button>
+                                </div>
+                              )}
+
+                              {activeTab === "testing" && (
+                                <div className="space-y-2">
+                                  <p className="text-[9px] text-indigo-600 font-semibold flex items-center justify-center gap-0.5">
+                                    <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                                    Hồi giờ 50 phút - Giả lập chuẩn
+                                  </p>
+                                  <button
+                                    onClick={() => handleStartSession(mod.id, "testing", ts.id)}
+                                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
+                                  >
+                                    <Play className="w-3 px-0.5 h-3 fill-white shrink-0" />
+                                    Luyện Đề Testing
+                                  </button>
+                                </div>
+                              )}
+
+                              {activeTab === "race" && (
+                                <div className="space-y-2">
+                                  <p className="text-[9px] text-rose-600 font-semibold flex items-center justify-center gap-0.5 animate-pulse">
+                                    <Flame className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                    Sai một câu là loại trực tiếp!
+                                  </p>
+                                  <button
+                                    onClick={() => handleStartSession(mod.id, "race", ts.id)}
+                                    className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
+                                  >
+                                    Thử Thách Race
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -1538,6 +1666,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
               onClick={() => {
                 setTestResult(null);
                 setSelectedModule(null);
+                setSelectedTestSetId(null);
                 setSessionMode(null);
               }}
               className="px-6 py-2.5 bg-slate-900 hover:bg-slate-801 text-white font-extrabold rounded-xl text-xs transition uppercase shadow cursor-pointer font-mono"
@@ -1547,7 +1676,7 @@ export default function PracticeModule({ onBackToHome }: PracticeModuleProps) {
 
             {sessionMode !== "race" && (
               <button
-                onClick={() => handleStartSession(testResult.moduleId, "testing")}
+                onClick={() => handleStartSession(testResult.moduleId, "testing", testResult.testSetId || undefined)}
                 className="px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />

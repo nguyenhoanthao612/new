@@ -5,9 +5,7 @@ import { IC3Provider, useIC3 } from "../lib/ic3store";
 import { IC3_MODULES } from "../lib/ic3data";
 import AuthViews from "../components/AuthViews";
 import PracticeModule from "../components/PracticeModule";
-import ExamSimulator from "../components/ExamSimulator";
 import Leaderboard from "../components/Leaderboard";
-import ExamPrepList from "../components/ExamPrepList";
 import AdminPanel from "../components/AdminPanel";
 import { 
   Menu, 
@@ -31,9 +29,6 @@ function HomeContent() {
   const [authFlowState, setAuthFlowState] = useState<"login" | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Active exam tracking
-  const [activeExamModule, setActiveExamModule] = useState<"cf" | "ka" | "lo" | null>(null);
-
   // Overriding check for Admin session
   let resolvedScreen = activeScreen;
   if (firebaseUser && activeRole === "admin") {
@@ -48,10 +43,6 @@ function HomeContent() {
     }
   }
 
-  const handleStartExam = (modId: "cf" | "ka" | "lo") => {
-    setActiveExamModule(modId);
-  };
-
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 text-slate-900" id="global-layout-root-container">
       {/* Sticky top header bar */}
@@ -61,7 +52,7 @@ function HomeContent() {
           {/* Platform Identity */}
           <button 
             id="nav-logo"
-            onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); setActiveExamModule(null); }}
+            onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); }}
             className="flex items-center gap-2.5 text-left bg-transparent border-none cursor-pointer"
           >
             <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-500/10 shrink-0">
@@ -77,7 +68,7 @@ function HomeContent() {
           <nav className="hidden md:flex items-center gap-6 text-xs font-bold text-slate-600" id="desktop-links-nav">
             <button
               id="nav-link-intro"
-              onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); setActiveExamModule(null); }}
+              onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); }}
               className={`hover:text-indigo-600 transition cursor-pointer py-1.5 ${resolvedScreen === "homepage" && !authFlowState ? "text-indigo-600 border-b-2 border-indigo-600 font-extrabold" : ""}`}
             >
               Trang giới thiệu
@@ -85,23 +76,15 @@ function HomeContent() {
 
             <button
               id="nav-link-practice"
-              onClick={() => { setActiveScreen("practice"); setAuthFlowState(null); setActiveExamModule(null); }}
+              onClick={() => { setActiveScreen("practice"); setAuthFlowState(null); }}
               className={`hover:text-indigo-600 transition cursor-pointer py-1.5 ${resolvedScreen === "practice" && !authFlowState ? "text-indigo-600 border-b-2 border-indigo-600 font-extrabold" : ""}`}
             >
               Luyện tập tự do
             </button>
 
             <button
-              id="nav-link-exams"
-              onClick={() => { setActiveScreen("exam"); setAuthFlowState(null); setActiveExamModule(null); }}
-              className={`hover:text-indigo-600 transition cursor-pointer py-1.5 ${resolvedScreen === "exam" && !authFlowState ? "text-indigo-600 border-b-2 border-indigo-600 font-extrabold" : ""}`}
-            >
-              Thi thử IC3
-            </button>
-
-            <button
               id="nav-link-leaderboard"
-              onClick={() => { setActiveScreen("leaderboard"); setAuthFlowState(null); setActiveExamModule(null); }}
+              onClick={() => { setActiveScreen("leaderboard"); setAuthFlowState(null); }}
               className={`hover:text-indigo-600 transition cursor-pointer py-1.5 ${resolvedScreen === "leaderboard" && !authFlowState ? "text-indigo-600 border-b-2 border-indigo-600 font-extrabold" : ""}`}
             >
               Bảng xếp hạng
@@ -110,7 +93,7 @@ function HomeContent() {
             {firebaseUser && activeRole === "admin" && (
               <button
                 id="nav-link-admin"
-                onClick={() => { setActiveScreen("admin"); setAuthFlowState(null); setActiveExamModule(null); }}
+                onClick={() => { setActiveScreen("admin"); setAuthFlowState(null); }}
                 className={`text-rose-600 hover:text-rose-700 transition cursor-pointer py-1.5 flex items-center gap-1 ${resolvedScreen === "admin" && !authFlowState ? "border-b-2 border-rose-600 font-extrabold" : ""}`}
               >
                 <ShieldCheck className="w-4 h-4" />
@@ -163,7 +146,7 @@ function HomeContent() {
           <div className="md:hidden border-t border-slate-100 bg-white p-4 space-y-3 shadow-inner" id="mobile-links-panel">
             <button
               id="m-nav-intro"
-              onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+              onClick={() => { setActiveScreen("homepage"); setAuthFlowState(null); setMobileMenuOpen(false); }}
               className="w-full text-left py-2 font-bold text-xs text-slate-700 block hover:text-indigo-600"
             >
               Trang giới thiệu
@@ -171,23 +154,15 @@ function HomeContent() {
 
             <button
               id="m-nav-practice"
-              onClick={() => { setActiveScreen("practice"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+              onClick={() => { setActiveScreen("practice"); setAuthFlowState(null); setMobileMenuOpen(false); }}
               className="w-full text-left py-2 font-bold text-xs text-slate-700 block hover:text-indigo-600"
             >
               Luyện tập tự do
             </button>
 
             <button
-              id="m-nav-exams"
-              onClick={() => { setActiveScreen("exam"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
-              className="w-full text-left py-2 font-bold text-xs text-slate-700 block hover:text-indigo-600"
-            >
-              Thi thử IC3
-            </button>
-
-            <button
               id="m-nav-leaderboard"
-              onClick={() => { setActiveScreen("leaderboard"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+              onClick={() => { setActiveScreen("leaderboard"); setAuthFlowState(null); setMobileMenuOpen(false); }}
               className="w-full text-left py-2 font-bold text-xs text-slate-700 block hover:text-indigo-600"
             >
               Bảng xếp hạng
@@ -196,7 +171,7 @@ function HomeContent() {
             {firebaseUser && activeRole === "admin" && (
               <button
                 id="m-nav-admin"
-                onClick={() => { setActiveScreen("admin"); setAuthFlowState(null); setActiveExamModule(null); setMobileMenuOpen(false); }}
+                onClick={() => { setActiveScreen("admin"); setAuthFlowState(null); setMobileMenuOpen(false); }}
                 className="w-full text-left py-2 font-bold text-xs text-rose-600 block flex items-center gap-1.5"
               >
                 <ShieldCheck className="w-4 h-4" />
@@ -230,10 +205,6 @@ function HomeContent() {
           <div className="py-6 animate-fade-in" id="auth-flow-overlay">
             <AuthViews flow="login" onSwitchFlow={(state) => setAuthFlowState(state ? "login" : null)} />
           </div>
-        ) : activeExamModule ? (
-          <div className="animate-fade-in" id="active-exam-room-layer">
-            <ExamSimulator module={activeExamModule} onClose={() => setActiveExamModule(null)} />
-          </div>
         ) : (
           <div className="animate-fade-in" id="standard-app-layer">
             
@@ -255,25 +226,17 @@ function HomeContent() {
                       Bứt Phá Kỹ Năng Số Với <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-sky-400">IC3 Master</span>
                     </h1>
                     <p className="text-slate-400 text-xs md:text-sm max-w-xl leading-relaxed">
-                      Luyện thi chuẩn máy tính quốc tế GS6. Trải nghiệm trọn vẹn cả 3 học phần: Máy tính căn bản, Các ứng dụng chủ chốt, và Cuộc sống trực tuyến với phòng thi mô phỏng thật 100% tài nguyên miễn phí.
+                      Hệ thống ôn luyện chuẩn tin học quốc tế GS6. Học tập trọng tâm cả 3 học phần: Máy tính căn bản, Các ứng dụng chủ chốt, và Cuộc sống trực tuyến với hệ thống chấm điểm sinh động, ngân hàng câu hỏi đa dạng và hoàn toàn miễn phí.
                     </p>
 
                     <div className="flex flex-wrap gap-3.5 pt-2" id="landing-hero-actions">
                       <button
                         id="hero-go-exams-btn"
-                        onClick={() => setActiveScreen("exam")}
+                        onClick={() => setActiveScreen("practice")}
                         className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl shadow-md hover:shadow-lg transition flex items-center gap-1.5 cursor-pointer"
                       >
-                        Thi Thử IC3 Ngay
+                        Bắt Đầu Ôn Luyện Ngay
                         <Play className="w-3 px-0.5 h-3 fill-white" />
-                      </button>
-                      
-                      <button
-                        id="hero-free-btn"
-                        onClick={() => setActiveScreen("practice")}
-                        className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold border border-slate-700 rounded-xl text-xs transition cursor-pointer"
-                      >
-                        Luyện Tập Tự Do
                       </button>
                     </div>
                   </div>
@@ -282,21 +245,21 @@ function HomeContent() {
                   <div className="bg-slate-950/55 border border-slate-800 p-6 rounded-2xl w-full lg:w-80 shrink-0 shadow-2xl relative z-10" id="hero-aesthetic-badge">
                     <div className="flex items-center gap-2 border-b border-slate-800 pb-3 mb-4">
                       <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-[10px] text-zinc-400 font-extrabold font-mono tracking-wider uppercase">Cơ sở dữ liệu sẵn sàng</span>
+                      <span className="text-[10px] text-zinc-400 font-extrabold font-mono tracking-wider uppercase">Hệ thống sẵn sàng</span>
                     </div>
 
                     <div className="space-y-4 text-xs font-semibold text-slate-300">
                       <div className="flex items-center gap-2">
                         <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span>Mô phỏng 100% áp lực phòng thi thật</span>
+                        <span>Sát cấu trúc phân phối chương trình GS6</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span>Giải đáp chi tiết đáp án chi tiết</span>
+                        <span>Giải đáp chi tiết đáp án tương tác</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span>Học thuật hoàn toàn miễn phí</span>
+                        <span>Phiên bản ôn tập hoàn toàn miễn phí</span>
                       </div>
                     </div>
                   </div>
@@ -326,7 +289,7 @@ function HomeContent() {
 
                         <div className="border-t border-slate-50 mt-5 pt-3.5 flex justify-between items-center text-[11px] font-bold text-slate-400">
                           <span>Thời lượng: {mod.timeLimit} phút</span>
-                          <span className="text-indigo-600 hover:underline inline-flex items-center gap-0.5 cursor-pointer" onClick={() => handleStartExam(mod.id)}>
+                          <span className="text-indigo-600 hover:underline inline-flex items-center gap-0.5 cursor-pointer" onClick={() => setActiveScreen("practice")}>
                             Chi tiết
                             <ArrowRight className="w-3 h-3" />
                           </span>
@@ -341,13 +304,7 @@ function HomeContent() {
 
             {/* 2. FREE PRACTICE ROUTE */}
             {resolvedScreen === "practice" && (
-              <PracticeModule onBackToHome={() => setActiveScreen("homepage")} />
-            )}
-
-            {/* 3. EXAM SIM PREP ROUTE */}
-            {resolvedScreen === "exam" && (
-              <ExamPrepList 
-                onStartExam={handleStartExam} 
+              <PracticeModule 
                 onBackToHome={() => setActiveScreen("homepage")} 
               />
             )}

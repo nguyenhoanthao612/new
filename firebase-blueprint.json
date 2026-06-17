@@ -236,6 +236,47 @@
         }
       },
       "required": ["questionText", "correctAnswer", "explanation"]
+    },
+    "TestSet": {
+      "title": "Practice Test Set",
+      "description": "Test structures with custom time limits, passing scores, and synchronized questions.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The test set identifier."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the practice test."
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the practice test."
+        },
+        "level": {
+          "type": "string",
+          "enum": ["cf", "ka", "lo"],
+          "description": "The GS6 module associated."
+        },
+        "duration": {
+          "type": "integer",
+          "description": "Time duration allowed in minutes."
+        },
+        "passingScore": {
+          "type": "integer",
+          "description": "Passing threshold score."
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Creation timestamp."
+        },
+        "updatedAt": {
+          "type": "integer",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": ["title", "level", "duration", "passingScore", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -258,6 +299,10 @@
     "/questions/{questionId}": {
       "schema": "IC3Question",
       "description": "Dynamic questions created by system administrators which supplement baseline static questions."
+    },
+    "/testSets/{testSetId}": {
+      "schema": "TestSet",
+      "description": "Customized user practice exam structures."
     }
   }
 }

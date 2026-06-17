@@ -7,19 +7,34 @@ import { Timer, ArrowLeft, ArrowRight, CheckCircle2, XCircle, AlertTriangle, Ref
 
 interface ExamSimulatorProps {
   module: "cf" | "ka" | "lo";
+  testSetId: string;
   onClose: () => void;
 }
 
-export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
-  const { saveExamResult } = useIC3();
+export default function ExamSimulator({ module, testSetId, onClose }: ExamSimulatorProps) {
+  const { questions: storeQuestions, testSets, saveExamResult } = useIC3();
+
+  const testSet = testSets.find((t) => t.id === testSetId) || {
+    id: `default_${module}`,
+    title: module === "cf" ? "Vòng Luyện Tập CF - Mặc Định" : module === "ka" ? "Vòng Luyện Tập KA - Mặc Định" : "Vòng Luyện Tập LO - Mặc Định",
+    description: "Bộ câu hỏi luyện tập mặc định cho học phần.",
+    level: module,
+    duration: 50,
+    passingScore: 700,
+  };
 
   const moduleInfo = IC3_MODULES.find((m) => m.id === module)!;
-  const questions = SAMPLE_QUESTIONS.filter((q) => q.module === module);
+  
+  // Filter questions belonging to this testSetId. Fallback to SAMPLE_QUESTIONS of this module if nothing matches.
+  let questions = storeQuestions.filter((q) => q.testSetId === testSetId);
+  if (questions.length === 0) {
+    questions = SAMPLE_QUESTIONS.filter((q) => q.module === module);
+  }
 
   // States
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
-  const [timeRemaining, setTimeRemaining] = useState(moduleInfo.timeLimit * 60); // in seconds
+  const [timeRemaining, setTimeRemaining] = useState(testSet.duration * 60); // in seconds
   const [examStatus, setExamStatus] = useState<"ready" | "testing" | "completed">("ready");
   const [score, setScore] = useState<{ correct: number; total: number; score1000: number; passed: boolean } | null>(null);
   const [showBlankWarning, setShowBlankWarning] = useState(false);
@@ -36,10 +51,11 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
     });
 
     const totalCount = questions.length;
-    const score1000 = Math.round((correctCount / totalCount) * 1000);
-    const passed = score1000 >= 700;
+    const ratio = totalCount > 0 ? (correctCount / totalCount) : 0;
+    const score1000 = Math.round(ratio * 1000);
+    const passed = score1000 >= testSet.passingScore;
 
-    const timeSpent = moduleInfo.timeLimit * 60 - timeRemaining;
+    const timeSpent = testSet.duration * 60 - timeRemaining;
 
     setScore({
       correct: correctCount,
@@ -51,11 +67,11 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
     setExamStatus("completed");
 
     try {
-      await saveExamResult(module, correctCount, totalCount, timeSpent);
+      await saveExamResult(module, correctCount, totalCount, timeSpent, testSet.id, testSet.title);
     } catch (e) {
       console.error("Lỗi khi lưu kết quả thi:", e);
     }
-  }, [questions, selectedAnswers, module, saveExamResult, moduleInfo.timeLimit, timeRemaining]);
+  }, [questions, selectedAnswers, module, saveExamResult, testSet, timeRemaining]);
 
   // Handle countdown timer
   useEffect(() => {
@@ -74,7 +90,7 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
   }, [timeRemaining, examStatus, submitExam]);
 
   const handleStartExam = () => {
-    setTimeRemaining(moduleInfo.timeLimit * 60);
+    setTimeRemaining(testSet.duration * 60);
     setSelectedAnswers({});
     setCurrentQuestionIndex(0);
     setExamStatus("testing");
@@ -102,33 +118,33 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
       {examStatus === "ready" && (
         <div className="text-center py-8 space-y-6 max-w-xl mx-auto" id="stage-ready">
           <h2 className="text-3xl font-extrabold font-display tracking-tight text-white">
-            Chuẩn bị thi thử IC3
+            Chuẩn bị ôn luyện IC3
           </h2>
           <div className="bg-slate-800/50 border border-slate-700/60 rounded-xl p-5 text-left text-slate-300 space-y-3">
-            <p className="font-semibold text-white">Chi tiết phòng thi:</p>
+            <p className="font-semibold text-white">Thông tin bài ôn luyện:</p>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-slate-400">Phân môn:</span>
-                <p className="font-medium text-white">{moduleInfo.name}</p>
+                <span className="text-slate-400">Tên bài:</span>
+                <p className="font-medium text-white">{testSet.title}</p>
               </div>
               <div>
-                <span className="text-slate-400">Số lượng câu hỏi:</span>
-                <p className="font-medium text-white">{questions.length} câu trắc nghiệm</p>
+                <span className="text-slate-400">Số câu hỏi:</span>
+                <p className="font-medium text-white">{questions.length} câu hỏi</p>
               </div>
               <div>
-                <span className="text-slate-400">Thời gian làm bài:</span>
-                <p className="font-medium text-white">{moduleInfo.timeLimit} phút</p>
+                <span className="text-slate-400">Thời gian quy định:</span>
+                <p className="font-medium text-white">{testSet.duration} phút</p>
               </div>
               <div>
-                <span className="text-slate-400">Điểm tối thiểu đạt:</span>
-                <p className="font-medium text-emerald-400">700 / 1000 điểm</p>
+                <span className="text-slate-400">Yêu cầu hoàn tất:</span>
+                <p className="font-medium text-emerald-400">{testSet.passingScore} / 1000 điểm</p>
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2 text-amber-300 bg-amber-500/10 border border-amber-500/20 px-4 py-3 rounded-lg text-sm text-center">
             <AlertTriangle className="w-5 h-5 shrink-0" />
-            <span>Màn hình sẽ hiển thị bộ đếm giờ. Vui lòng không tải lại trang khi đang thi.</span>
+            <span>Màn hình hiển thị bộ đếm giờ. Vui lòng không tải lại trình duyệt khi đang thực hiện bài làm.</span>
           </div>
 
           <div className="flex gap-4 justify-center pt-2">
@@ -144,7 +160,7 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
               onClick={handleStartExam}
               className="px-8 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-lg shadow-md transition"
             >
-              Bắt đầu Thi thử
+              Bắt đầu Ôn Tập
             </button>
           </div>
         </div>
@@ -157,7 +173,7 @@ export default function ExamSimulator({ module, onClose }: ExamSimulatorProps) {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
             <div>
               <p className="text-xs font-semibold uppercase text-blue-400 tracking-wider">
-                Đang thi thử • {moduleInfo.name}
+                Đang làm bài ôn tập • {testSet.title}
               </p>
               <h3 className="text-lg font-bold text-white mt-0.5">
                 Câu hỏi {currentQuestionIndex + 1} / {questions.length}

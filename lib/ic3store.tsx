@@ -17,7 +17,7 @@ import {
   updateDoc
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { UserProgress, ExamRecord, Classroom, UploadedDocument, IC3Question, SAMPLE_QUESTIONS } from "./ic3data";
+import { UserProgress, ExamRecord, Classroom, UploadedDocument, IC3Question, SAMPLE_QUESTIONS, TestSet } from "./ic3data";
 
 export enum OperationType {
   CREATE = 'create',
@@ -76,19 +76,24 @@ interface IC3ContextType {
   documents: UploadedDocument[];
   allUsers: UserProgress[];
   questions: IC3Question[];
+  testSets: TestSet[];
   loginWithEmail: (email: string, password: string) => Promise<void>;
   registerWithEmail: (email: string, password: string, displayName: string, role: "student" | "teacher") => Promise<void>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   joinClassroom: (code: string) => Promise<void>;
   createClassroom: (name: string) => Promise<string>;
-  saveExamResult: (module: "cf" | "ka" | "lo", correctCount: number, totalQuestions: number, timeSpent: number) => Promise<void>;
+  saveExamResult: (module: "cf" | "ka" | "lo", correctCount: number, totalQuestions: number, timeSpent: number, testSetId?: string, testSetTitle?: string) => Promise<void>;
   updateUserRole: (newRole: "student" | "teacher" | "admin") => Promise<void>;
   uploadDocument: (name: string, size: number, type: string) => Promise<string>;
   deleteDocument: (docId: string) => Promise<void>;
   addQuestion: (q: Omit<IC3Question, "id">) => Promise<void>;
   deleteQuestion: (qId: string) => Promise<void>;
   updateQuestion: (qId: string, q: Partial<IC3Question>) => Promise<void>;
+  addTestSet: (t: Omit<TestSet, "id">) => Promise<string>;
+  updateTestSet: (tId: string, t: Partial<TestSet>) => Promise<void>;
+  deleteTestSet: (tId: string) => Promise<void>;
+  duplicateTestSet: (tId: string) => Promise<string>;
 }
 
 const IC3Context = createContext<IC3ContextType | undefined>(undefined);
@@ -105,6 +110,33 @@ export const isUserAdmin = (user: User | null): boolean => {
   );
 };
 
+export const DEFAULT_TEST_SETS: TestSet[] = [
+  {
+    id: "default_cf",
+    title: "Vòng Luyện Tập CF - Mặc Định",
+    description: "Bộ câu hỏi luyện tập mặc định cho Mô-đun Computing Fundamentals.",
+    level: "cf",
+    duration: 50,
+    passingScore: 700,
+  },
+  {
+    id: "default_ka",
+    title: "Vòng Luyện Tập KA - Mặc Định",
+    description: "Bộ câu hỏi luyện tập mặc định cho Mô-đun Key Applications.",
+    level: "ka",
+    duration: 50,
+    passingScore: 700,
+  },
+  {
+    id: "default_lo",
+    title: "Vòng Luyện Tập LO - Mặc Định",
+    description: "Bộ câu hỏi luyện tập mặc định cho Mô-đun Living Online.",
+    level: "lo",
+    duration: 50,
+    passingScore: 700,
+  }
+];
+
 export function IC3Provider({ children }: { children: React.ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProgress | null>(null);
@@ -115,6 +147,8 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
   const [allUsers, setAllUsers] = useState<UserProgress[]>([]);
   const [dbQuestions, setDbQuestions] = useState<IC3Question[]>([]);
   const [questions, setQuestions] = useState<IC3Question[]>([]);
+  const [dbTestSets, setDbTestSets] = useState<TestSet[]>([]);
+  const [testSets, setTestSets] = useState<TestSet[]>([]);
 
   // Guest users state saved to localStorage
   const [localExamRecords, setLocalExamRecords] = useState<ExamRecord[]>([]);
@@ -184,6 +218,9 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
           else correctIdx = 0; // standard fallback
         }
 
+        const originalTestSetId = data.testSetId || "";
+        const finalTestSetId = originalTestSetId ? originalTestSetId : `default_${moduleVal}`;
+
         list.push({
           id: d.id,
           module: moduleVal,
@@ -206,6 +243,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
           imageUrl: data.imageUrl || "",
           hotspots: data.hotspots || [],
           correctSequence: data.correctSequence || [],
+          testSetId: finalTestSetId,
         } as IC3Question);
       });
       setDbQuestions(list);
@@ -214,6 +252,42 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     });
     return () => unsubscribe();
   }, []);
+
+  // Listen to all Test Sets (Publicly accessible)
+  useEffect(() => {
+    const testSetsQuery = collection(db, "testSets");
+    const unsubscribe = onSnapshot(testSetsQuery, (snapshot) => {
+      const list: TestSet[] = [];
+      snapshot.forEach((d) => {
+        const data = d.data();
+        list.push({
+          id: d.id,
+          title: data.title || "",
+          description: data.description || "",
+          level: data.level || "cf",
+          duration: Number(data.duration) || 50,
+          passingScore: Number(data.passingScore) || 700,
+          createdAt: data.createdAt || Date.now(),
+          updatedAt: data.updatedAt || Date.now(),
+        } as TestSet);
+      });
+      setDbTestSets(list);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, "testSets");
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Merge dbTestSets with DEFAULT_TEST_SETS
+  useEffect(() => {
+    const combined = [...DEFAULT_TEST_SETS];
+    dbTestSets.forEach((d) => {
+      if (!combined.some((c) => c.id === d.id)) {
+        combined.push(d);
+      }
+    });
+    setTestSets(combined);
+  }, [dbTestSets]);
 
   // If Firestore is empty, fall back to SAMPLE_QUESTIONS. Once there are questions in Firestore, use only Firestore.
   useEffect(() => {
@@ -400,7 +474,9 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     module: "cf" | "ka" | "lo",
     correctCount: number,
     totalQuestions: number,
-    timeSpent: number
+    timeSpent: number,
+    testSetId?: string,
+    testSetTitle?: string
   ) => {
     const ratio = correctCount / totalQuestions;
     const scoreVal = Math.round(ratio * 1000);
@@ -415,7 +491,9 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       totalQuestions,
       timeSpent,
       passed,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      testSetId: testSetId || "",
+      testSetTitle: testSetTitle || ""
     };
 
     if (isUserAdmin(firebaseUser)) {
@@ -474,6 +552,70 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const addTestSet = async (t: Omit<TestSet, "id">) => {
+    if (isUserAdmin(firebaseUser)) {
+      try {
+        const docRef = await addDoc(collection(db, "testSets"), t);
+        return docRef.id;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, "testSets");
+        return "";
+      }
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được tạo bài kiểm tra.");
+    }
+  };
+
+  const updateTestSet = async (tId: string, t: Partial<TestSet>) => {
+    if (isUserAdmin(firebaseUser)) {
+      const { id, ...data } = t as any;
+      try {
+        await updateDoc(doc(db, "testSets", tId), data);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `testSets/${tId}`);
+      }
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được chỉnh sửa bài kiểm tra.");
+    }
+  };
+
+  const deleteTestSet = async (tId: string) => {
+    if (isUserAdmin(firebaseUser)) {
+      try {
+        await deleteDoc(doc(db, "testSets", tId));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `testSets/${tId}`);
+      }
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được xóa bài kiểm tra.");
+    }
+  };
+
+  const duplicateTestSet = async (tId: string) => {
+    if (isUserAdmin(firebaseUser)) {
+      const found = testSets.find(item => item.id === tId);
+      if (!found) throw new Error("Không tìm thấy bài kiểm tra để nhân bản.");
+      try {
+        const payload: Omit<TestSet, "id"> = {
+          title: `${found.title} - Bản Sao`,
+          description: found.description || "",
+          level: found.level,
+          duration: found.duration,
+          passingScore: found.passingScore,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        const docRef = await addDoc(collection(db, "testSets"), payload);
+        return docRef.id;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, "testSets");
+        return "";
+      }
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được nhân bản bài kiểm tra.");
+    }
+  };
+
   return (
     <IC3Context.Provider
       value={{
@@ -486,6 +628,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
         documents,
         allUsers,
         questions,
+        testSets,
         loginWithEmail,
         registerWithEmail,
         logout,
@@ -498,7 +641,11 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
         deleteDocument,
         addQuestion,
         deleteQuestion,
-        updateQuestion
+        updateQuestion,
+        addTestSet,
+        updateTestSet,
+        deleteTestSet,
+        duplicateTestSet
       }}
     >
       {children}

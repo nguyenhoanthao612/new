@@ -36,8 +36,13 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
-    // Public collections (i.e. questions)
+    // Public collections (i.e. questions and testSets)
     match /questions/{questionId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /testSets/{testSetId} {
       allow read: if true;
       allow write: if isAdmin();
     }
