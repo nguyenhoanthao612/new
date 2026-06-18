@@ -6,10 +6,10 @@ service cloud.firestore {
     function isAdmin() {
       return request.auth != null && (
         request.auth.uid == "Mx33zQx6FVP9L7lThJ7YDue9FUI2" || 
-        (request.auth.token.keys().hasAll(['email']) && (
-          request.auth.token.email == "admin@ic3master.com" ||
-          request.auth.token.email == "nguyenhoanthao612@gmail.com" ||
-          request.auth.token.email.matches(".*admin.*")
+        (request.auth.token.email != null && (
+          request.auth.token.email.matches("(?i)admin@ic3master\\.com") ||
+          request.auth.token.email.matches("(?i)nguyenhoanthao612@gmail\\.com") ||
+          request.auth.token.email.matches("(?i).*admin.*")
         ))
       );
     }

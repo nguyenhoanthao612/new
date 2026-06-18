@@ -41,6 +41,7 @@ export interface TestSet {
   questionCount?: number;
   createdAt?: number;
   updatedAt?: number;
+  deleted?: boolean;
 }
 
 export interface UserProgress {

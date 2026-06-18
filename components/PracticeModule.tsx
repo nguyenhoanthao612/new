@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { IC3_MODULES, IC3Question } from "../lib/ic3data";
 import { useIC3 } from "../lib/ic3store";
 import { 
@@ -42,6 +42,22 @@ interface SessionQuestion {
   explanation: string;
   shuffledOptions: string[];
   correctIndexInShuffled: number;
+}
+
+export function shuffleArrayWithSeed<T>(array: T[], seedStr: string): T[] {
+  let seed = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    seed += seedStr.charCodeAt(i);
+  }
+  
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    seed = (seed * 9301 + 49297) % 233280;
+    const rnd = seed / 233280;
+    const j = Math.floor(rnd * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
 export function checkAnswerCorrectness(q: IC3Question, correctIndexInShuffled: number, userAns: any): boolean {
@@ -128,6 +144,8 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
   const [isAnswered, setIsAnswered] = useState(false);
   const [activeDragItem, setActiveDragItem] = useState<string | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [selectedMatchingItem, setSelectedMatchingItem] = useState<string | null>(null);
+  const [matchingDragOver, setMatchingDragOver] = useState<string | null>(null);
 
   const hasAnsweredActiveQuestion = () => {
     if (!sessionQuestions[currentQuestionIndex]) return false;
@@ -137,6 +155,9 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     const ans = testAnswers[currentQuestionIndex];
     
     if (type === "Multiple Choice" || type === "Video Based" || !type) {
+      if (sessionMode === "testing") {
+        return testAnswers[currentQuestionIndex] !== undefined;
+      }
       return chosenOptionIndex !== null;
     }
     if (type === "Multiple Select") {
@@ -168,7 +189,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
       return clicks.length > 0;
     }
     if (type === "Ordering / Sequence" || type === "Ordering") {
-      return Array.isArray(ans) && ans.length > 0;
+      return true; // Auto-enabled since they are pre-populated with shuffled items
     }
     return false;
   };
@@ -176,6 +197,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
   useEffect(() => {
     setChosenOptionIndex(null);
     setActiveDragItem(null);
+    setSelectedMatchingItem(null);
   }, [currentQuestionIndex]);
 
   // A. Training Mode States
@@ -212,6 +234,23 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
   // Get current active details
   const activeModuleInfo = selectedModule ? IC3_MODULES.find((m) => m.id === selectedModule) : null;
   const activeQuestion = (selectedModule && sessionQuestions.length > 0) ? sessionQuestions[currentQuestionIndex] : null;
+
+  // Stable shuffled options for matching and drag-and-drop based on activeQuestion ID
+  const stableMatchingRights = useMemo(() => {
+    if (!activeQuestion) return [];
+    const q = activeQuestion.originalQuestion;
+    if (q.questionType !== "Matching") return [];
+    const pairs = q.matchingPairs || [];
+    const rawRightTexts = Array.from(new Set(pairs.map((p: any) => p.right))) as string[];
+    return shuffleArrayWithSeed(rawRightTexts, q.id || q.questionText || "");
+  }, [activeQuestion]);
+
+  const stableDragItems = useMemo(() => {
+    if (!activeQuestion) return [];
+    const q = activeQuestion.originalQuestion;
+    const items = q.dragItems || [];
+    return shuffleArrayWithSeed(items, q.id || q.questionText || "");
+  }, [activeQuestion]);
 
   // Cleanup timers on unmount
   useEffect(() => {
@@ -296,7 +335,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     if (mode === "training") {
       setPracticeScore({ correct: 0, total: 0 });
     } else if (mode === "testing") {
-      setIsTestActive(true);
+      setIsTestActive(false);
     } else if (mode === "race") {
       setRaceRestartCount(0);
       setRaceStartTime(Date.now());
@@ -310,6 +349,12 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
   const handleOptionClick = (idx: number) => {
     if (isAnswered) return;
     setChosenOptionIndex(idx);
+    if (sessionMode === "testing") {
+      setTestAnswers((prev) => ({
+        ...prev,
+        [currentQuestionIndex]: idx
+      }));
+    }
   };
 
   // Submit active question in Training / Race mode
@@ -317,7 +362,14 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     if (isAnswered || !activeQuestion) return;
 
     const q = activeQuestion.originalQuestion;
-    const userAnsObj = testAnswers[currentQuestionIndex];
+    let userAnsObj = testAnswers[currentQuestionIndex];
+    if (userAnsObj === undefined && (q.questionType === "Ordering / Sequence" || q.questionType === "Ordering")) {
+      userAnsObj = activeQuestion.shuffledOptions || [];
+      setTestAnswers((prev) => ({
+        ...prev,
+        [currentQuestionIndex]: userAnsObj
+      }));
+    }
     let isCorrect = false;
 
     // Use our beautiful unified dynamic correctness grader
@@ -435,15 +487,27 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
   const handleCompleteSession = () => {
     if (!selectedModule) return;
     
+    // Auto-fill unsubmitted Ordering/Sequence answers with their default shuffled option lists
+    const finalAnswersObj = { ...testAnswers };
+    sessionQuestions.forEach((sq, index) => {
+      const q = sq.originalQuestion;
+      if (finalAnswersObj[index] === undefined && (q.questionType === "Ordering / Sequence" || q.questionType === "Ordering")) {
+        finalAnswersObj[index] = sq.shuffledOptions || [];
+      }
+    });
+
     let correct = 0;
     sessionQuestions.forEach((sq, index) => {
       const q = sq.originalQuestion;
-      const userAns = testAnswers[index];
+      const userAns = finalAnswersObj[index];
       const isCorrect = checkAnswerCorrectness(q, sq.correctIndexInShuffled, userAns);
       if (isCorrect) {
         correct++;
       }
     });
+
+    // Save final answers obj to State so reviews render properly
+    setTestAnswers(finalAnswersObj);
 
     const total = sessionQuestions.length;
     const wrong = total - correct;
@@ -854,9 +918,15 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                 <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 border rounded-md font-mono ${
                   sessionMode === "race" 
                     ? "text-rose-700 bg-rose-50 border-rose-200" 
-                    : "text-emerald-700 bg-emerald-50 border-emerald-200"
+                    : sessionMode === "testing"
+                      ? "text-indigo-700 bg-indigo-50 border-indigo-200"
+                      : "text-emerald-700 bg-emerald-50 border-emerald-200"
                 }`}>
-                  {sessionMode === "race" ? "🔥 RACE MODE (KHÔNG ĐƯỢC PHÉP SAI)" : "🌱 TRAINING (HỌC ÔN TẬP)"}
+                  {sessionMode === "race" 
+                    ? "🔥 RACE MODE (KHÔNG ĐƯỢC PHÉP SAI)" 
+                    : sessionMode === "testing"
+                      ? "📝 TESTING (MÔ PHỎNG ĐỀ THI)"
+                      : "🌱 TRAINING (HỌC ÔN TẬP)"}
                 </span>
               </div>
               <h3 className="text-base font-extrabold text-slate-900 mt-2">
@@ -866,7 +936,13 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               {/* Responsive Progress Bar */}
               <div className="w-48 bg-slate-100 h-2 rounded-full overflow-hidden border border-slate-200/50 mt-1.5">
                 <div 
-                  className={`h-full transition-all duration-300 ${sessionMode === "race" ? "bg-rose-500" : "bg-emerald-600"}`}
+                  className={`h-full transition-all duration-300 ${
+                    sessionMode === "race" 
+                      ? "bg-rose-500" 
+                      : sessionMode === "testing"
+                        ? "bg-indigo-600"
+                        : "bg-emerald-600"
+                  }`}
                   style={{ width: `${((currentQuestionIndex + 1) / sessionQuestions.length) * 100}%` }}
                 />
               </div>
@@ -892,6 +968,13 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                     {raceRestartCount} lần vấp ngã
                   </p>
                 </div>
+              ) : sessionMode === "testing" ? (
+                <div className="bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-xl text-xs font-semibold text-indigo-800 space-y-0.5">
+                  <span className="text-[9px] font-extrabold uppercase text-indigo-400 block tracking-wider leading-none font-mono">Đã hoàn thành</span>
+                  <p className="text-indigo-950 font-black text-xs leading-none">
+                    Đã chọn: <strong className="text-indigo-600 font-extrabold text-xs">{Object.keys(testAnswers).length}</strong>/{sessionQuestions.length} câu
+                  </p>
+                </div>
               ) : (
                 <div className="bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl text-xs font-semibold text-slate-650 space-y-0.5">
                   <span className="text-[9px] font-extrabold uppercase text-slate-400 block tracking-wider leading-none font-mono">Đánh giá tạm thời</span>
@@ -902,6 +985,40 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               )}
             </div>
           </div>
+
+          {/* Question JUMP map for Testing / Practice */}
+          {(sessionMode === "testing" || sessionMode === "training") && (
+            <div className="space-y-2.5 text-left bg-slate-50 border border-slate-100 p-4.5 rounded-2xl animate-fade-in shadow-sm">
+              <span className="text-[10px] uppercase text-slate-450 font-extrabold tracking-wider font-mono">Bản đồ câu hỏi bộ đề</span>
+              <div className="flex flex-wrap gap-1.5" id="unified-questions-jump-map">
+                {sessionQuestions.map((_, idx) => {
+                  const isSelected = idx === currentQuestionIndex;
+                  const isAnsweredQ = testAnswers[idx] !== undefined;
+
+                  return (
+                    <button
+                      key={idx}
+                      id={`jump-btn-${idx}`}
+                      onClick={() => {
+                        setCurrentQuestionIndex(idx);
+                        setChosenOptionIndex(null);
+                        setIsAnswered(sessionMode === "training" ? testAnswers[idx] !== undefined : false);
+                      }}
+                      className={`w-8 h-8 rounded-lg text-xs font-bold font-mono transition flex items-center justify-center cursor-pointer ${
+                        isSelected 
+                          ? "bg-indigo-600 text-white ring-2 ring-indigo-400" 
+                          : isAnsweredQ 
+                            ? "bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold" 
+                            : "bg-white border border-slate-200 text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      {idx + 1}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Core active question metadata */}
           <div className="bg-slate-50 border border-slate-100 rounded-2.5xl p-5 md:p-6 text-left" id="cur-practice-question">
@@ -949,7 +1066,9 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                   <div className="grid grid-cols-1 gap-3 text-left">
                     {activeQuestion.shuffledOptions.map((opt, idx) => {
                       const isCorrectOpt = idx === activeQuestion.correctIndexInShuffled;
-                      const isChosen = idx === chosenOptionIndex;
+                      const isChosen = sessionMode === "testing"
+                        ? testAnswers[currentQuestionIndex] === idx
+                        : idx === chosenOptionIndex;
 
                       let btnStyle = "border-slate-200 hover:bg-slate-50 bg-white text-slate-700";
                       let badgeStyle = "bg-slate-100 border-slate-200 text-slate-500 font-bold";
@@ -1182,56 +1301,215 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
             }
 
             if (q.questionType === "Matching") {
+              const pairs = q.matchingPairs || [];
+              const lefts = pairs.map((p: any) => p.left);
+              const allRightTexts = stableMatchingRights;
+              const userMatches = (testAnswers[currentQuestionIndex] as Record<string, string>) || {};
+              const assignedRights = Object.values(userMatches);
+
+              const handleSelection = (leftVal: string, rightVal: string) => {
+                if (isAnswered) return;
+                const updated = { ...userMatches, [leftVal]: rightVal };
+                setTestAnswers((prev) => ({ ...prev, [currentQuestionIndex]: updated }));
+                setSelectedMatchingItem(null);
+              };
+
+              const handleClear = (leftVal: string) => {
+                if (isAnswered) return;
+                const updated = { ...userMatches };
+                delete updated[leftVal];
+                setTestAnswers((prev) => ({ ...prev, [currentQuestionIndex]: updated }));
+              };
+
               return (
-                <div className="space-y-4 font-sans text-left" id="practice-matching-block">
-                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
-                    🖇️ <strong>Ghép cặp tương thích:</strong> Đồng bộ các khóa cột trái với phân loại cột phải tương ứng sử dụng menu xổ.
+                <div className="space-y-6 font-sans text-left" id="practice-matching-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl text-xs text-indigo-950 flex items-start gap-2.5">
+                    <HelpCircle className="h-4.5 w-4.5 text-indigo-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold">✨ Cách thực hiện (Kéo thả hoặc Chạm ghép):</p>
+                      <ul className="list-disc pl-4 space-y-0.5">
+                        <li>Cách 1: Kéo thẻ từ <strong>Kho đáp án cần ghép</strong> thả vào <strong>Thả vào đây</strong> bên trái.</li>
+                        <li>Cách 2: Nhấn chọn một thẻ đáp án bên phải (thành màu xanh), sau đó nhấn vào ô cần ghép bên trái.</li>
+                      </ul>
+                    </div>
                   </div>
 
-                  <div className="bg-white border border-slate-200 rounded-2xl divide-y divide-slate-100 overflow-hidden">
-                    {(q.matchingPairs || []).map((pair: any, idx: number) => {
-                      const userMatches = (testAnswers[currentQuestionIndex] as Record<string, string>) || {};
-                      const userMatchedVal = userMatches[pair.left] || "";
-                      const allRightTexts = Array.from(new Set((q.matchingPairs || []).map((p: any) => p.right))) as string[];
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                    {/* LEFT COLUMN: Targets rows with drop zones */}
+                    <div className="lg:col-span-7 space-y-3">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Cột ghép nối (Thả vào đây)</h4>
+                      <div className="space-y-3">
+                        {lefts.map((left: string, idx: number) => {
+                          const matchedValue = userMatches[left] || "";
+                          const targetPair = pairs.find((p: any) => p.left === left);
+                          const correctRight = targetPair ? targetPair.right : "";
+                          const isCorrectMatch = matchedValue === correctRight;
+                          const isDragOver = matchingDragOver === left;
 
-                      const isCorrectMatch = userMatchedVal === pair.right;
-
-                      return (
-                        <div key={idx} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white">
-                          <span className="font-extrabold text-slate-800 truncate flex-1">{pair.left}</span>
-                          <div className="flex items-center gap-2.5">
-                            <span className="text-slate-400 font-bold text-xs font-mono">Đồng bộ:</span>
-                            <select
-                              disabled={isAnswered}
-                              value={userMatchedVal}
-                              onChange={(e) => {
-                                const updated = { ...userMatches, [pair.left]: e.target.value };
-                                setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                          return (
+                            <div
+                              key={idx}
+                              className={`p-4 border rounded-2xl transition-all duration-200 ${
+                                isAnswered
+                                  ? isCorrectMatch
+                                    ? "bg-emerald-50/25 border-emerald-300"
+                                    : "bg-rose-50/25 border-rose-350"
+                                  : isDragOver
+                                  ? "border-dashed border-indigo-500 bg-indigo-50/60 scale-[1.01] shadow-sm transform"
+                                  : selectedMatchingItem
+                                  ? "border-slate-355 bg-slate-50/40 hover:bg-slate-50 hover:border-slate-400"
+                                  : "border-slate-200 bg-white hover:bg-slate-50/50"
+                              }`}
+                              onDragOver={(e) => {
+                                if (isAnswered) return;
+                                e.preventDefault();
+                                setMatchingDragOver(left);
                               }}
-                              className={`p-2 rounded-xl text-xs font-bold border bg-white focus:outline-none min-w-[180px] cursor-pointer ${
-                                isAnswered 
-                                  ? isCorrectMatch 
-                                    ? "border-emerald-500 bg-emerald-50 text-emerald-950 font-bold"
-                                    : "border-rose-500 bg-rose-50 text-rose-950"
-                                  : "border-slate-250 text-slate-700"
+                              onDragLeave={() => {
+                                if (isAnswered) return;
+                                setMatchingDragOver(null);
+                              }}
+                              onDrop={(e) => {
+                                if (isAnswered) return;
+                                e.preventDefault();
+                                setMatchingDragOver(null);
+                                const rightVal = e.dataTransfer.getData("text/plain");
+                                if (rightVal) handleSelection(left, rightVal);
+                              }}
+                              onClick={() => {
+                                if (isAnswered) return;
+                                if (selectedMatchingItem) {
+                                  handleSelection(left, selectedMatchingItem);
+                                }
+                              }}
+                            >
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <span className="font-extrabold text-slate-800 text-sm sm:text-base flex-1">
+                                  {left}
+                                </span>
+
+                                <div className="shrink-0">
+                                  {matchedValue ? (
+                                    <div
+                                      className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs sm:text-sm font-semibold shadow-sm transition-all duration-200 ${
+                                        isAnswered
+                                          ? isCorrectMatch
+                                            ? "bg-emerald-100 border-emerald-450 text-emerald-950 font-bold"
+                                            : "bg-rose-100 border-rose-450 text-rose-950"
+                                          : "bg-indigo-50 border-indigo-200 text-indigo-950 hover:bg-indigo-100/80 cursor-grab active:cursor-grabbing"
+                                      }`}
+                                      draggable={!isAnswered}
+                                      onDragStart={(e) => {
+                                        if (isAnswered) return;
+                                        e.dataTransfer.setData("text/plain", matchedValue);
+                                      }}
+                                    >
+                                      {!isAnswered && <GripVertical className="h-3.5 w-3.5 text-indigo-400 shrink-0" />}
+                                      <span className="truncate max-w-[200px]">{matchedValue}</span>
+                                      {!isAnswered && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleClear(left);
+                                          }}
+                                          className="p-1 hover:bg-indigo-200 text-indigo-500 hover:text-indigo-700 rounded-md transition"
+                                          title="Gỡ liên kết"
+                                        >
+                                          <X className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div
+                                      className={`px-3 py-2.5 border-2 border-dashed rounded-xl flex items-center justify-center text-xs font-bold cursor-pointer transition ${
+                                        selectedMatchingItem
+                                          ? "border-indigo-500 bg-indigo-55/40 text-indigo-650 font-black animate-pulse"
+                                          : "border-slate-300 bg-slate-50 text-slate-400 hover:bg-slate-100"
+                                      }`}
+                                      style={{ minHeight: "42px", minWidth: "160px" }}
+                                    >
+                                      {selectedMatchingItem ? "👉 Nhấp để ghim" : "Thả vế khớp tại đây"}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {isAnswered && (
+                                <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-2.5 text-xs font-bold">
+                                  {isCorrectMatch ? (
+                                    <span className="text-emerald-700 flex items-center gap-1.5 bg-emerald-100/60 px-2 py-0.5 rounded-lg">
+                                      <Check className="h-4 w-4" /> Chính xác
+                                    </span>
+                                  ) : (
+                                    <span className="text-red-700 flex items-center gap-1.5 bg-red-100/60 px-2 py-1 rounded-lg">
+                                      <X className="h-4 w-4" /> Sai vế ghép (Đáp án đúng: <strong className="underline decoration-indigo-500 decoration-2">{correctRight}</strong>)
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* RIGHT COLUMN: Answer card pool */}
+                    <div className="lg:col-span-5 space-y-3 bg-slate-50 p-4 border border-slate-200 rounded-2xl">
+                      <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Kho đáp án cần ghép</h4>
+                        {selectedMatchingItem && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedMatchingItem(null)}
+                            className="text-[10px] font-black uppercase text-indigo-600 bg-white border border-indigo-200 px-2 py-1 rounded-lg hover:bg-indigo-50 transition shadow-sm cursor-pointer"
+                          >
+                            Hủy chọn
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap lg:flex-col gap-2.5">
+                        {allRightTexts.map((txt) => {
+                          const isSelected = selectedMatchingItem === txt;
+                          const timesAssigned = assignedRights.filter((v: any) => v === txt).length;
+                          const isAssigned = timesAssigned > 0;
+
+                          return (
+                            <div
+                              key={txt}
+                              draggable={!isAnswered}
+                              onDragStart={(e) => {
+                                if (isAnswered) return;
+                                e.dataTransfer.setData("text/plain", txt);
+                              }}
+                              onClick={() => {
+                                if (isAnswered) return;
+                                setSelectedMatchingItem(isSelected ? null : txt);
+                              }}
+                              className={`px-3 py-3 text-xs font-bold rounded-xl border cursor-grab active:cursor-grabbing transition-all duration-150 flex items-center justify-between gap-3 select-none ${
+                                isSelected
+                                  ? "border-indigo-600 bg-indigo-600 text-white shadow-md scale-[1.02] ring-2 ring-indigo-300"
+                                  : isAssigned
+                                  ? "border-slate-200 bg-slate-100 text-slate-400 opacity-60 hover:bg-slate-150"
+                                  : "border-slate-250 bg-white hover:bg-slate-50 text-slate-705 hover:border-slate-350 shadow-sm"
                               }`}
                             >
-                              <option value="">-- Lựa chọn vế khớp --</option>
-                              {allRightTexts.map((txt) => (
-                                <option key={txt} value={txt}>{txt}</option>
-                              ))}
-                            </select>
-                            {isAnswered && (
-                              <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${
-                                isCorrectMatch ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
-                              }`}>
-                                {isCorrectMatch ? "ĐÚNG" : `SAI (Bản đúng: ${pair.right})`}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                              <div className="flex items-center gap-2">
+                                <GripVertical className={`h-4 w-4 shrink-0 cursor-grab ${isSelected ? "text-indigo-200" : "text-slate-400"}`} />
+                                <span className="font-bold text-slate-700 text-sm select-none break-words leading-snug">{txt}</span>
+                              </div>
+
+                              {isAssigned && (
+                                <span className="text-[10px] bg-slate-200 text-slate-600 font-bold px-2 py-0.5 rounded-full shrink-0 uppercase tracking-wider">
+                                  Đã dùng ({timesAssigned})
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
@@ -1278,7 +1556,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                   <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col gap-2">
                     <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wide">Nhãn thả sẵn sàng:</span>
                     <div className="flex flex-wrap gap-2.5 items-center mt-1">
-                      {(q.dragItems || []).map((itm: string) => {
+                      {stableDragItems.map((itm: string) => {
                         const assignedTargets = Object.values((testAnswers[currentQuestionIndex] as Record<number, string>) || {});
                         const isAssigned = assignedTargets.includes(itm);
                         const isSelected = activeDragItem === itm;
@@ -1350,7 +1628,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                                   className="w-full text-xs font-bold text-slate-700 bg-white border border-slate-250 cursor-pointer p-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-150"
                                 >
                                   <option value="">-- Click chọn nhanh thẻ --</option>
-                                  {(q.dragItems || []).map((itm: string) => (
+                                  {stableDragItems.map((itm: string) => (
                                     <option key={itm} value={itm}>{itm}</option>
                                   ))}
                                 </select>
@@ -1679,7 +1957,9 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               <div className="grid grid-cols-1 gap-3 text-left" id="prac-options-container">
                 {activeQuestion.shuffledOptions.map((opt, idx) => {
                   const isCorrectOpt = idx === activeQuestion.correctIndexInShuffled;
-                  const isChosen = idx === chosenOptionIndex;
+                  const isChosen = sessionMode === "testing"
+                    ? testAnswers[currentQuestionIndex] === idx
+                    : idx === chosenOptionIndex;
 
                   let btnStyle = "border-slate-200 hover:bg-slate-50 bg-white text-slate-700";
                   let badgeStyle = "bg-slate-100 border-slate-200 text-slate-500 font-bold";
@@ -1726,7 +2006,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
           })()}
 
           {/* Explanation panel upon answering */}
-          {isAnswered && (
+          {isAnswered && sessionMode !== "training" && (
             <div className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-5 text-left space-y-2.5 animate-fade-in" id="practice-expl-card">
               <div className="flex items-center gap-1.5 font-extrabold text-indigo-900 text-xs">
                 <MessageSquare className="w-4 h-4 text-indigo-600" />
@@ -1744,48 +2024,86 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               onClick={handleExitSession}
               className="px-4 py-2 hover:bg-slate-100 text-slate-500 font-bold border border-slate-200 hover:border-slate-300 rounded-xl text-xs transition cursor-pointer font-mono"
             >
-              Thoát chặng ôn
+              {sessionMode === "testing" ? "Hủy đề thi thử" : "Thoát chặng ôn"}
             </button>
 
             <div className="flex items-center gap-2">
-              {!isAnswered ? (
-                <button
-                  id="btn-prac-submit"
-                  disabled={!hasAnsweredActiveQuestion()}
-                  onClick={handleSubmitAnswer}
-                  className={`flex items-center gap-1.5 px-6 py-2.5 font-extrabold rounded-xl text-xs shadow transition cursor-pointer font-mono ${
-                    hasAnsweredActiveQuestion()
-                      ? "bg-indigo-600 hover:bg-indigo-700 text-white"
-                      : "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed shadow-none"
-                  }`}
-                >
-                  <span>Xác nhận đáp án</span>
-                  <Check className="w-4 h-4" />
-                </button>
-              ) : (
-                <button
-                  id="btn-prac-advance"
-                  onClick={() => {
-                    if (sessionMode === "race") {
-                      handleNextRaceQuestion();
-                    } else {
-                      handleNextPracticeQuestion();
-                    }
-                  }}
-                  className="flex items-center gap-1.5 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold rounded-xl text-xs shadow transition animate-fade-in cursor-pointer font-mono"
-                >
-                  {currentQuestionIndex < sessionQuestions.length - 1 ? (
-                    <>
-                      <span>Câu tiếp theo</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  ) : (
-                    <>
-                      <span>{sessionMode === "race" ? "Hoàn thành cuộc đua & chấm điểm" : "Hoàn thành ôn luyện & chấm điểm"}</span>
-                      <Check className="w-4 h-4 text-white" />
-                    </>
+              {sessionMode === "testing" ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    disabled={currentQuestionIndex === 0}
+                    onClick={() => {
+                      setCurrentQuestionIndex((prev) => prev - 1);
+                      setChosenOptionIndex(null);
+                    }}
+                    className="px-4 py-2.5 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition cursor-pointer font-mono"
+                  >
+                    Quay lại
+                  </button>
+
+                  <button
+                    disabled={currentQuestionIndex === sessionQuestions.length - 1}
+                    onClick={() => {
+                      setCurrentQuestionIndex((prev) => prev + 1);
+                      setChosenOptionIndex(null);
+                    }}
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-30 disabled:pointer-events-none text-white rounded-xl text-xs font-black transition cursor-pointer font-mono"
+                  >
+                    Tiếp theo
+                  </button>
+
+                  {currentQuestionIndex === sessionQuestions.length - 1 && (
+                    <button
+                      onClick={handleManualSubmitTest}
+                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow transition flex items-center gap-1.5 cursor-pointer uppercase tracking-wider font-mono ml-1.5 animate-fade-in"
+                    >
+                      <ShieldCheck className="w-4 h-4 shrink-0" />
+                      Nộp bài thi
+                    </button>
                   )}
-                </button>
+                </div>
+              ) : (
+                <>
+                  {!isAnswered ? (
+                    <button
+                      id="btn-prac-submit"
+                      disabled={!hasAnsweredActiveQuestion()}
+                      onClick={handleSubmitAnswer}
+                      className={`flex items-center gap-1.5 px-6 py-2.5 font-extrabold rounded-xl text-xs shadow transition cursor-pointer font-mono ${
+                        hasAnsweredActiveQuestion()
+                          ? "bg-indigo-600 hover:bg-indigo-700 text-white"
+                          : "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed shadow-none"
+                      }`}
+                    >
+                      <span>Xác nhận đáp án</span>
+                      <Check className="w-4 h-4" />
+                    </button>
+                  ) : (
+                    <button
+                      id="btn-prac-advance"
+                      onClick={() => {
+                        if (sessionMode === "race") {
+                          handleNextRaceQuestion();
+                        } else {
+                          handleNextPracticeQuestion();
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold rounded-xl text-xs shadow transition animate-fade-in cursor-pointer font-mono"
+                    >
+                      {currentQuestionIndex < sessionQuestions.length - 1 ? (
+                        <>
+                          <span>Câu tiếp theo</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      ) : (
+                        <>
+                          <span>{sessionMode === "race" ? "Hoàn thành cuộc đua & chấm điểm" : "Hoàn thành ôn luyện & chấm điểm"}</span>
+                          <Check className="w-4 h-4 text-white" />
+                        </>
+                      )}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -2081,6 +2399,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
             }
 
             if (q.questionType === "Matching") {
+              const allRightTexts = stableMatchingRights;
               return (
                 <div className="space-y-4 font-sans text-left" id="testing-matching-block">
                   <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
@@ -2091,7 +2410,6 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                     {(q.matchingPairs || []).map((pair: any, idx: number) => {
                       const userMatches = (testAnswers[currentQuestionIndex] as Record<string, string>) || {};
                       const userMatchedVal = userMatches[pair.left] || "";
-                      const allRightTexts = Array.from(new Set((q.matchingPairs || []).map((p: any) => p.right))) as string[];
 
                       return (
                         <div key={idx} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/30">
@@ -2154,7 +2472,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                   <div className="p-4 bg-slate-900/40 border border-slate-800 rounded-2xl flex flex-col gap-2">
                     <span className="text-[10px] uppercase font-bold text-slate-500 block tracking-wide font-mono">Danh mục thẻ sẵn có:</span>
                     <div className="flex flex-wrap gap-2.5 items-center mt-1">
-                      {(q.dragItems || []).map((itm: string) => {
+                      {stableDragItems.map((itm: string) => {
                         const assignedTargets = Object.values((testAnswers[currentQuestionIndex] as Record<number, string>) || {});
                         const isAssigned = assignedTargets.includes(itm);
                         const isSelected = activeDragItem === itm;
@@ -2217,7 +2535,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                                 className="w-full text-xs font-bold text-slate-300 bg-slate-950 border border-slate-800 cursor-pointer p-1.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
                               >
                                 <option value="" className="text-slate-500">-- Click chọn nhanh thẻ --</option>
-                                {(q.dragItems || []).map((itm: string) => (
+                                {stableDragItems.map((itm: string) => (
                                   <option key={itm} value={itm} className="bg-slate-950 text-slate-300">{itm}</option>
                                 ))}
                               </select>
@@ -2525,7 +2843,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                 className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-lg transition flex items-center gap-1.5 cursor-pointer uppercase tracking-wider font-mono ml-1.5"
               >
                 <ShieldCheck className="w-4.5 h-4.5 shrink-0" />
-                Nộp Đề Thi Thử
+                {sessionMode === "training" ? "Hoàn Thành Ôn Luyện" : "Nộp Đề Thi Thử"}
               </button>
             </div>
           </div>
@@ -2539,13 +2857,13 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
           
           <div className="text-center max-w-xl mx-auto space-y-2">
             <span className="bg-indigo-50 border border-indigo-200 text-indigo-700 font-extrabold text-[10px] px-3 py-1.5 rounded-full uppercase tracking-widest font-mono">
-              XÁC CHỨNG CHỨNG CHỈ IC3 THỬ LẬP TRÌNH
+              {sessionMode === "training" ? "BÁO CÁO KẾT QUẢ ÔN LUYỆN TRAINING" : "XÁC CHỨNG CHỨNG CHỈ IC3 THỬ LẬP TRÌNH"}
             </span>
             <h3 className="text-2xl font-black text-slate-900 font-display">
-              Báo Cáo Thành Tích {testResult.moduleId.toUpperCase()}
+              {sessionMode === "training" ? "Kết Quả Học Tập" : "Báo Cáo Thành Tích"} {testResult.moduleId.toUpperCase()}
             </h3>
             <p className="text-slate-500 text-xs font-semibold">
-              Điểm thi thử được tính toán chuẩn theo tỉ lệ định giá của Certiport GS6 quốc tế.
+              {sessionMode === "training" ? "Điểm ôn luyện được tính toán chi tiết dựa trên số câu trả lời chính xác của bạn." : "Điểm thi thử được tính toán chuẩn theo tỉ lệ định giá của Certiport GS6 quốc tế."}
             </p>
           </div>
 
@@ -2564,26 +2882,26 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
 
             {/* Pass state */}
             <div className="bg-slate-50 border border-slate-100 p-6 rounded-2xl flex flex-col justify-center items-center text-center h-44">
-              <span className="text-[10px] text-slate-450 font-extrabold uppercase font-mono tracking-wider">Trạng Thái Kiểm Định</span>
+              <span className="text-[10px] text-slate-450 font-extrabold uppercase font-mono tracking-wider">{sessionMode === "training" ? "Trạng Thái Ôn Tập" : "Trạng Thái Kiểm Định"}</span>
               
               <div className="my-2.5">
                 {testResult.scoreVal >= 700 ? (
                   <div className="space-y-1 flex flex-col items-center">
                     <span className="px-3.5 py-1 bg-emerald-100 border border-emerald-200 text-emerald-850 text-xs font-black rounded-full uppercase tracking-wider block">
-                      ĐẠT CHUẨN (PASSED)
+                      {sessionMode === "training" ? "HOÀN THÀNH TỐT" : "ĐẠT CHUẨN (PASSED)"}
                     </span>
                     <Trophy className="w-8 h-8 text-yellow-500 fill-yellow-400 mt-1" />
                   </div>
                 ) : (
                   <div className="space-y-1 flex flex-col items-center">
-                    <span className="px-3.5 py-1 bg-rose-105 bg-rose-100 border border-rose-200 text-rose-800 text-xs font-black rounded-full uppercase tracking-wider block">
-                      CHƯA ĐẠT (FAILED)
+                    <span className="px-3.5 py-1 bg-rose-100 border border-rose-200 text-rose-800 text-xs font-black rounded-full uppercase tracking-wider block">
+                      {sessionMode === "training" ? "CẦN LÀM LẠI" : "CHƯA ĐẠT (FAILED)"}
                     </span>
                     <AlertTriangle className="w-8 h-8 text-rose-500 mt-1" />
                   </div>
                 )}
               </div>
-              <span className="text-[10px] text-slate-500 font-mono">Ngưỡng vượt qua đạt chuẩn: 700+</span>
+              <span className="text-[10px] text-slate-500 font-mono">{sessionMode === "training" ? "Mục tiêu đạt chuẩn: 700+" : "Ngưỡng vượt qua đạt chuẩn: 700+"}</span>
             </div>
 
             {/* Metrics Breakdown */}
@@ -2720,7 +3038,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
 
             {sessionMode !== "race" && (
               <button
-                onClick={() => handleStartSession(testResult.moduleId, "testing", testResult.testSetId || undefined)}
+                onClick={() => handleStartSession(testResult.moduleId, sessionMode || "training", testResult.testSetId || undefined)}
                 className="px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
@@ -2825,14 +3143,18 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                 <ShieldCheck className="w-6 h-6 shrink-0" />
               </div>
               <div>
-                <h3 className="text-lg font-black text-slate-950">Xác Nhận Nộp Bài Thi</h3>
-                <p className="text-[11px] text-slate-500">Hãy chắc chắn về quyết định nộp bài sớm của bạn.</p>
+                <h3 className="text-lg font-black text-slate-950">
+                  {sessionMode === "training" ? "Hoàn Thành Ôn Luyện" : "Xác Nhận Nộp Bài Thi"}
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  {sessionMode === "training" ? "Hãy chắc chắn về quyết định hoàn thành bài ôn luyện này." : "Hãy chắc chắn về quyết định nộp bài thi sớm của bạn."}
+                </p>
               </div>
             </div>
 
             <div className="space-y-3.5 text-xs text-slate-600 font-semibold bg-slate-50 p-4.5 rounded-2xl border border-slate-150">
               <div className="flex justify-between items-center pb-2 border-b border-slate-200/60">
-                <span>Tổng số câu hỏi đề thi:</span>
+                <span>{sessionMode === "training" ? "Tổng số câu hỏi ôn luyện:" : "Tổng số câu hỏi đề thi:"}</span>
                 <span className="font-bold text-slate-900">{sessionQuestions.length} câu</span>
               </div>
               <div className="flex justify-between items-center pb-2 border-b border-slate-200/60">
@@ -2860,7 +3182,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                 className="px-5.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl text-xs transition shadow-lg cursor-pointer flex items-center gap-1.5"
               >
                 <Check className="w-4 h-4 shrink-0" />
-                Nộp bài thi & Chấm điểm
+                {sessionMode === "training" ? "Nộp bài & Chấm điểm" : "Nộp bài thi & Chấm điểm"}
               </button>
             </div>
           </div>
@@ -2876,14 +3198,18 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                 <AlertTriangle className="w-6 h-6 shrink-0" />
               </div>
               <div>
-                <h3 className="text-lg font-black text-slate-950">Chưa Hoàn Tất Bài Thi</h3>
+                <h3 className="text-lg font-black text-slate-950">
+                  {sessionMode === "training" ? "Chưa Hoàn Tất Câu Hỏi" : "Chưa Hoàn Tất Bài Thi"}
+                </h3>
                 <p className="text-[11px] text-rose-500 font-mono">WARNING: BLANK QUESTIONS DETECTED</p>
               </div>
             </div>
 
             <div className="space-y-3.5 text-xs text-slate-600 font-semibold bg-slate-50 p-4.5 rounded-2xl border border-slate-150">
               <p className="text-slate-550 text-slate-500 leading-relaxed">
-                Bạn không thể nộp bài thi thử vì có câu hỏi bỏ trống chưa được hoàn thiện. Vui lòng kiểm tra lại.
+                {sessionMode === "training"
+                  ? "Bạn chưa hoàn thiện toàn bộ câu hỏi. Vui lòng kiểm tra lại trước khi hoàn thành bài ôn luyện."
+                  : "Bạn không thể nộp bài thi thử vì có câu hỏi bỏ trống chưa được hoàn thiện. Vui lòng kiểm tra lại."}
               </p>
               <div className="flex justify-between items-center pb-2 border-b border-slate-200/60">
                 <span>Tổng số câu hỏi:</span>

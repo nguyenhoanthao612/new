@@ -27,7 +27,7 @@ export interface Question {
   [key: string]: any;
 }
 
-import { Check, X, MoveHorizontal, MapPin, Play, Pause, RotateCw, FolderPlus, FileText, ChevronRight, HelpCircle } from "lucide-react";
+import { Check, X, MoveHorizontal, MapPin, Play, Pause, RotateCw, FolderPlus, FileText, ChevronRight, HelpCircle, GripVertical } from "lucide-react";
 
 interface QuestionSimulationProps {
   question: Question;
@@ -302,6 +302,9 @@ function MatchingSim({ question, currentAnswer = {}, onChangeAnswer, showFeedbac
   const lefts = pairs.map((p) => p.left) as any[];
   const rights = Array.from(new Set(pairs.map((p) => p.right))) as any[];
 
+  const [selectedItem, setSelectedItem] = useState<string | null>(null);
+  const [draggedOverLeft, setDraggedOverLeft] = useState<string | null>(null);
+
   const handleSelection = (left: string, rightVal: string) => {
     if (showFeedback) return;
     const updated = {
@@ -309,82 +312,207 @@ function MatchingSim({ question, currentAnswer = {}, onChangeAnswer, showFeedbac
       [left]: rightVal,
     };
     onChangeAnswer(updated);
+    setSelectedItem(null);
   };
 
+  const handleClear = (left: string) => {
+    if (showFeedback) return;
+    const updated = { ...(currentAnswer as Record<string, string> || {}) };
+    delete updated[left];
+    onChangeAnswer(updated);
+  };
+
+  const userMatches = (currentAnswer as Record<string, string>) || {};
+  const assignedRights = Object.values(userMatches);
+
   return (
-    <div className="space-y-4" id={`matching-container-${question.id}`}>
-      <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 flex items-center space-x-2 text-xs text-gray-600">
-        <HelpCircle className="h-4 w-4 text-indigo-500 shrink-0" />
-        <span>Hãy liên kết mỗi mục ở cột bên Trái với phân loại chính xác ở cột bên Phải bằng cách chọn từ hộp thả xuống.</span>
+    <div className="space-y-6" id={`matching-container-${question.id}`}>
+      <div className="bg-indigo-50/70 border border-indigo-100 p-3.5 rounded-xl text-xs text-indigo-950 flex items-start gap-2.5">
+        <HelpCircle className="h-4.5 w-4.5 text-indigo-600 shrink-0 mt-0.5" />
+        <div className="space-y-1">
+          <p className="font-bold">✨ Cách thực hiện (Kéo thả hoặc Chạm ghép):</p>
+          <ul className="list-disc pl-4 space-y-0.5">
+            <li>Cách 1: Kéo thẻ từ <strong>Kho đáp án cần ghép</strong> thả vào <strong>Thả vào đây</strong> bên trái.</li>
+            <li>Cách 2: Nhấn chọn một thẻ đáp án bên phải (thành màu xanh), sau đó nhấn vào ô cần ghép bên trái.</li>
+          </ul>
+        </div>
       </div>
 
-      <div className="divide-y divide-gray-100 border border-gray-200 rounded-xl overflow-hidden bg-white">
-        {lefts.map((left, index) => {
-          const matchedValue = (currentAnswer as Record<string, string> || {})[left] || "";
-          const correctRight = pairs.find((p) => p.left === left)?.right;
-          const isCorrect = matchedValue === correctRight;
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* LEFT COLUMN: Targets rows */}
+        <div className="lg:col-span-7 space-y-3">
+          <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Cột ghép nối (Thả vào đây)</h4>
+          <div className="space-y-3">
+            {lefts.map((left, index) => {
+              const matchedValue = userMatches[left] || "";
+              const correctRight = pairs.find((p) => p.left === left)?.right;
+              const isCorrect = matchedValue === correctRight;
+              const isDragOver = draggedOverLeft === left;
 
-          return (
-            <div
-              key={left}
-              id={`matching-row-${index}`}
-              className={`p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all ${
-                showFeedback
-                  ? isCorrect
-                    ? "bg-green-50/25"
-                    : "bg-red-50/25"
-                  : "hover:bg-gray-50/50"
-              }`}
-            >
-              <div className="flex-1 font-semibold text-gray-800 text-sm md:text-base">
-                {left}
-              </div>
-              
-              <div className="flex items-center space-x-3 shrink-0">
-                <div className="text-gray-400">
-                  <MoveHorizontal className="h-4 w-4 hidden md:block" />
-                </div>
-                
-                <div className="relative">
-                  <select
-                    id={`match-select-${index}`}
-                    value={matchedValue}
-                    onChange={(e) => handleSelection(left, e.target.value)}
-                    disabled={showFeedback}
-                    className={`w-56 text-sm px-3 py-2 rounded-lg border bg-white font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                      showFeedback
-                        ? isCorrect
-                          ? "border-green-500 text-green-900 bg-green-50"
-                          : "border-red-400 text-red-950 bg-red-50"
-                        : "border-gray-300 text-gray-700"
-                    }`}
-                  >
-                    <option value="">-- Chọn đáp án ghép --</option>
-                    {rights.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              return (
+                <div 
+                  key={left} 
+                  className={`p-4 border rounded-2xl transition-all duration-200 ${
+                    showFeedback
+                      ? isCorrect
+                        ? "bg-green-50/25 border-green-300"
+                        : "bg-red-50/25 border-red-350"
+                      : isDragOver
+                      ? "border-dashed border-indigo-500 bg-indigo-50/60 scale-[1.01] shadow-sm transform"
+                      : selectedItem
+                      ? "border-slate-355 bg-slate-50/40 hover:bg-slate-50 hover:border-slate-400"
+                      : "border-slate-200 bg-white hover:bg-slate-50/50"
+                  }`}
+                  onDragOver={(e) => {
+                    if (showFeedback) return;
+                    e.preventDefault();
+                    setDraggedOverLeft(left);
+                  }}
+                  onDragLeave={() => {
+                    if (showFeedback) return;
+                    setDraggedOverLeft(null);
+                  }}
+                  onDrop={(e) => {
+                    if (showFeedback) return;
+                    e.preventDefault();
+                    setDraggedOverLeft(null);
+                    const rightVal = e.dataTransfer.getData("text/plain");
+                    if (rightVal) handleSelection(left, rightVal);
+                  }}
+                  onClick={() => {
+                    if (showFeedback) return;
+                    if (selectedItem) {
+                      handleSelection(left, selectedItem);
+                    }
+                  }}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="font-semibold text-slate-800 text-sm sm:text-base flex-1">
+                      {left}
+                    </div>
 
-                {showFeedback && (
-                  <div className="shrink-0">
-                    {isCorrect ? (
-                      <span className="inline-flex items-center px-2 py-1 rounded bg-green-100 text-green-800 text-xs font-bold gap-1" id="matching-correct-tag">
-                        <Check className="h-3 w-3" /> Đúng
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-1 rounded bg-red-100 text-red-800 text-xs font-bold gap-1" id="matching-wrong-tag">
-                        <X className="h-3 w-3" /> Sai (Đáp án: {correctRight})
-                      </span>
-                    )}
+                    <div className="shrink-0">
+                      {matchedValue ? (
+                        <div 
+                          className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs sm:text-sm font-semibold shadow-sm transition-all duration-200 ${
+                            showFeedback
+                              ? isCorrect
+                                ? "bg-green-100 border-green-400 text-green-950 font-bold"
+                                : "bg-red-100 border-red-400 text-red-950"
+                              : "bg-indigo-50 border-indigo-200 text-indigo-950 hover:bg-indigo-100/80 cursor-grab active:cursor-grabbing"
+                          }`}
+                          draggable={!showFeedback}
+                          onDragStart={(e) => {
+                            if (showFeedback) return;
+                            e.dataTransfer.setData("text/plain", matchedValue);
+                          }}
+                        >
+                          {!showFeedback && <GripVertical className="h-3.5 w-3.5 text-indigo-400 shrink-0" />}
+                          <span className="truncate max-w-[200px]">{matchedValue}</span>
+                          {!showFeedback && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleClear(left);
+                              }}
+                              className="p-1 hover:bg-indigo-200 text-indigo-500 hover:text-indigo-700 rounded-md transition"
+                              title="Gỡ liên kết"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div 
+                          className={`px-3 py-2.5 border-2 border-dashed rounded-xl flex items-center justify-center text-xs font-bold cursor-pointer transition ${
+                            selectedItem
+                              ? "border-indigo-500 bg-indigo-55/40 text-indigo-650 font-black animate-pulse"
+                              : "border-slate-300 bg-slate-50 text-slate-400 hover:bg-slate-100"
+                          }`}
+                          style={{ minHeight: "42px", minWidth: "160px" }}
+                        >
+                          {selectedItem ? "👉 Nhấp để ghim" : "Thả vế khớp tại đây"}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
+
+                  {showFeedback && (
+                    <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-2.5 text-xs font-bold font-sans">
+                      {isCorrect ? (
+                        <span className="text-emerald-700 flex items-center gap-1.5 bg-emerald-100/60 px-2 py-0.5 rounded-lg">
+                          <Check className="h-4 w-4" /> Chính xác
+                        </span>
+                      ) : (
+                        <span className="text-red-700 flex items-center gap-1.5 bg-red-100/60 px-2 py-1 rounded-lg">
+                          <X className="h-4 w-4" /> Sai vế ghép (Đáp án đúng: <strong className="underline decoration-indigo-500 decoration-2">{correctRight}</strong>)
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN: Answer card pool */}
+        <div className="lg:col-span-5 space-y-3 bg-slate-50 p-4 border border-slate-200 rounded-2xl">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2">
+            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Kho đáp án cần ghép</h4>
+            {selectedItem && (
+              <button
+                type="button"
+                onClick={() => setSelectedItem(null)}
+                className="text-[10px] font-black uppercase text-indigo-600 bg-white border border-indigo-200 px-2 py-1 rounded-lg hover:bg-indigo-50 transition shadow-sm cursor-pointer"
+              >
+                Hủy chọn
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap lg:flex-col gap-2.5">
+            {rights.map((txt) => {
+              const isSelected = selectedItem === txt;
+              const timesAssigned = assignedRights.filter((v) => v === txt).length;
+              const isAssigned = timesAssigned > 0;
+
+              return (
+                <div
+                  key={txt}
+                  draggable={!showFeedback}
+                  onDragStart={(e) => {
+                    if (showFeedback) return;
+                    e.dataTransfer.setData("text/plain", txt);
+                  }}
+                  onClick={() => {
+                    if (showFeedback) return;
+                    setSelectedItem(isSelected ? null : txt);
+                  }}
+                  className={`px-3 py-3 text-xs font-bold rounded-xl border cursor-grab active:cursor-grabbing transition-all duration-150 flex items-center justify-between gap-3 select-none ${
+                    isSelected
+                      ? "border-indigo-600 bg-indigo-600 text-white shadow-md scale-[1.02] ring-2 ring-indigo-300"
+                      : isAssigned
+                      ? "border-slate-200 bg-slate-100 text-slate-400 opacity-60 hover:bg-slate-150"
+                      : "border-slate-250 bg-white hover:bg-slate-50 text-slate-705 hover:border-slate-350 shadow-sm"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <GripVertical className={`h-4 w-4 shrink-0 cursor-grab ${isSelected ? "text-indigo-200" : "text-slate-400"}`} />
+                    <span className="font-bold text-slate-700 text-sm select-none break-words leading-snug">{txt}</span>
+                  </div>
+
+                  {isAssigned && (
+                    <span className="text-[10px] bg-slate-200 text-slate-600 font-bold px-2 py-0.5 rounded-full shrink-0 uppercase tracking-wider">
+                      Đã dùng ({timesAssigned})
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );

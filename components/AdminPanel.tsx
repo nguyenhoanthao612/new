@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useIC3 } from "../lib/ic3store";
 import { IC3_MODULES, UserProgress, IC3Question } from "../lib/ic3data";
 import { 
@@ -98,6 +98,49 @@ export default function AdminPanel() {
   const [formImageUrl, setFormImageUrl] = useState("");
   const [formHotspots, setFormHotspots] = useState<Array<{ x: number; y: number; radius: number }>>([]);
   const [adminHotspotRadius, setAdminHotspotRadius] = useState<number>(3);
+  const [draggingSpotIdx, setDraggingSpotIdx] = useState<number | null>(null);
+  const adminCanvasRef = useRef<HTMLDivElement>(null);
+
+  const handleSpotPointerDown = (e: React.PointerEvent<HTMLDivElement>, idx: number) => {
+    e.stopPropagation();
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDraggingSpotIdx(idx);
+  };
+
+  const handleSpotPointerMove = (e: React.PointerEvent<HTMLDivElement>, idx: number) => {
+    if (draggingSpotIdx !== idx || !adminCanvasRef.current) return;
+    e.stopPropagation();
+    e.preventDefault();
+    
+    const rect = adminCanvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    const pctX = Math.max(0, Math.min(100, Number(((x / rect.width) * 100).toFixed(1))));
+    const pctY = Math.max(0, Math.min(100, Number(((y / rect.height) * 100).toFixed(1))));
+
+    setFormHotspots(current => {
+      const updated = [...current];
+      if (updated[idx]) {
+        updated[idx] = {
+          ...updated[idx],
+          x: pctX,
+          y: pctY
+        };
+      }
+      return updated;
+    });
+  };
+
+  const handleSpotPointerUp = (e: React.PointerEvent<HTMLDivElement>, idx: number) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (err) {}
+    setDraggingSpotIdx(null);
+  };
   
   // Dynamic Custom Question Type states
   const [formCorrectIndicesMulti, setFormCorrectIndicesMulti] = useState<number[]>([]);
@@ -112,6 +155,12 @@ export default function AdminPanel() {
   const [successPopup, setSuccessPopup] = useState<{ isOpen: boolean; message: string; subMessage?: string } | null>(null);
 
   const handleAdminImgClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (draggingSpotIdx !== null) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('.cursor-move')) {
+      return;
+    }
+
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
@@ -554,7 +603,7 @@ export default function AdminPanel() {
     const detectedCorrectIndices: number[] = [];
 
     let isParsingOptions = false;
-    const optionPrefixRegex = /^([-a-eA-Eg1-4]|đúng|sai)\s*[\.\)\-:\s]\s*(.*)$/i;
+    const optionPrefixRegex = /^([-a-jA-J1-9]|đúng|sai)\s*[\.\)\-:\s]\s*(.*)$/i;
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -565,15 +614,21 @@ export default function AdminPanel() {
         continue;
       }
 
-      const ansMatch = line.match(/^(?:đáp án|đáp án đúng|correct answer|answer|key|ans|dap an)[:\-=\s]\s*([a-dgA-DG1-4\s,;+&|/]+)$/i);
+      const ansMatch = line.match(/^(?:đáp án|đáp án đúng|correct answer|answer|key|ans|dap an)[:\-=\s]\s*([a-jA-J1-9\s,;+&|/]+)$/i);
       if (ansMatch) {
-         const letters = ansMatch[1].toUpperCase().replace(/[^A-D1-4]/g, "").split("");
+         const letters = ansMatch[1].toUpperCase().replace(/[^A-J1-9]/g, "").split("");
          letters.forEach(char => {
            let idx = -1;
            if (["A", "1"].includes(char)) idx = 0;
            else if (["B", "2"].includes(char)) idx = 1;
            else if (["C", "3"].includes(char)) idx = 2;
            else if (["D", "4"].includes(char)) idx = 3;
+           else if (["E", "5"].includes(char)) idx = 4;
+           else if (["F", "6"].includes(char)) idx = 5;
+           else if (["G", "7"].includes(char)) idx = 6;
+           else if (["H", "8"].includes(char)) idx = 7;
+           else if (["I", "9"].includes(char)) idx = 8;
+           else if (["J"].includes(char)) idx = 9;
            if (idx !== -1 && !detectedCorrectIndices.includes(idx)) {
              detectedCorrectIndices.push(idx);
            }
@@ -589,7 +644,7 @@ export default function AdminPanel() {
       if (!isParsingOptions) {
         questionLines.push(line);
       } else {
-        const prefixMatch = line.match(/^([-a-eA-Eg1-4]|đúng|sai)\s*[\.\)\-:\s]\s*(.*)$/i);
+        const prefixMatch = line.match(/^([-a-jA-J1-9]|đúng|sai)\s*[\.\)\-:\s]\s*(.*)$/i);
         let rawPrefix = "";
         let cleanText = line;
         if (prefixMatch) {
@@ -736,18 +791,17 @@ export default function AdminPanel() {
       setFormCorrectAnswerBool(isCorrectBool);
       showNotice("success", `⚡ Đã nhận diện câu hỏi Đúng/Sai (Đơn) với đáp án: ${isCorrectBool ? 'Đúng' : 'Sai'}!`);
     } else {
-      const optA = parsed.options[0]?.text || "";
-      const optB = parsed.options[1]?.text || "";
-      const optC = parsed.options[2]?.text || "";
-      const optD = parsed.options[3]?.text || "";
+      const dynamicList = parsed.options.map(opt => opt.text || "");
+      while (dynamicList.length < 4) {
+        dynamicList.push("");
+      }
       
-      setFormOptA(optA);
-      setFormOptB(optB);
-      setFormOptC(optC);
-      setFormOptD(optD);
+      setFormOptA(dynamicList[0] || "");
+      setFormOptB(dynamicList[1] || "");
+      setFormOptC(dynamicList[2] || "");
+      setFormOptD(dynamicList[3] || "");
       
-      const paddedList = [optA, optB, optC, optD];
-      setFormOptionsList(paddedList);
+      setFormOptionsList(dynamicList);
       
       const correctIndicesMarked = parsed.options
         .map((o, idx) => o.isCorrect ? idx : -1)
@@ -872,6 +926,17 @@ export default function AdminPanel() {
     if (!formText.trim()) {
       showNotice("error", "Vui lòng nhập nội dung câu hỏi bắt buộc!");
       return;
+    }
+
+    if (formQuestionType === "Hotspot") {
+      if (!formImageUrl.trim()) {
+        showNotice("error", "Vui lòng nhập đường liên kết ảnh nền cho câu hỏi hotspot!");
+        return;
+      }
+      if (formHotspots.length === 0) {
+        showNotice("error", "Vui lòng nhấp trực tiếp lên ảnh để thiết lập ít nhất 1 điểm hotspot đúng!");
+        return;
+      }
     }
 
     setIsSubmittingQuestion(true);
@@ -1960,6 +2025,7 @@ export default function AdminPanel() {
                   onChange={(e) => {
                     const val = e.target.value as "cf" | "ka" | "lo";
                     setFormModule(val);
+                    setFormTestSetId(""); // Reset the selected test set in the dropdown!
                     // Automatically sync state internally for backward compatibility if any components look at formLevel
                     if (val === "cf") setFormLevel("CF (LV1)");
                     else if (val === "ka") setFormLevel("KA (LV2)");
@@ -2002,16 +2068,9 @@ export default function AdminPanel() {
                   onChange={(e) => setFormTestSetId(e.target.value)}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold cursor-pointer text-slate-800"
                 >
-                  {formModule === "cf" ? (
-                    <>
-                      <option value="">Bài luyện tập tổng hợp (Mặc định)</option>
-                      <option value="ot1_cf">OT1 (Bài kiểm tra luyện đề)</option>
-                    </>
-                  ) : (
-                    <option value="">-- Mặc định (Bổ trợ theo Level) --</option>
-                  )}
+                  <option value="">Không gán bài ôn luyện (Luyện tập tự do)</option>
                   {[...testSets]
-                    .filter((ts) => ts.level === formModule && ts.id !== "default_cf" && ts.id !== "default_ka" && ts.id !== "default_lo" && ts.id !== "ot1_cf")
+                    .filter((ts) => ts.level === formModule && ts.id !== "default_cf" && ts.id !== "default_ka" && ts.id !== "default_lo")
                     .sort((a, b) => a.title.localeCompare(b.title, "vi", { numeric: true, sensitivity: "base" }))
                     .map((ts) => (
                       <option key={ts.id} value={ts.id}>
@@ -2204,9 +2263,11 @@ export default function AdminPanel() {
                       
                       {formImageUrl ? (
                         <div 
+                          ref={adminCanvasRef}
                           onClick={handleAdminImgClick}
                           className="relative border-2 border-slate-200 rounded-xl overflow-hidden cursor-crosshair select-none bg-slate-100 max-w-full inline-block group shadow-md"
                           id="admin-hotspot-drawing-canvas"
+                          style={{ touchAction: "none" }}
                         >
                           <img 
                             src={formImageUrl} 
@@ -2218,17 +2279,27 @@ export default function AdminPanel() {
                           {formHotspots.map((spot, idx) => (
                             <div 
                               key={idx} 
-                              className="absolute bg-emerald-500/30 border border-emerald-600 rounded-full flex items-center justify-center text-[10px] text-white font-black"
+                              className="absolute bg-emerald-500/40 border-2 border-emerald-650 rounded-full flex items-center justify-center text-[10px] text-white font-black cursor-move select-none hover:scale-105 active:scale-95 transition-transform z-30 group"
                               style={{
                                 left: `${spot.x}%`,
                                 top: `${spot.y}%`,
                                 width: `${spot.radius * 2}%`,
                                 height: `${spot.radius * 2}%`,
-                                transform: "translate(-50%, -50%)"
+                                transform: "translate(-50%, -50%)",
+                                touchAction: "none"
+                              }}
+                              onPointerDown={(e) => handleSpotPointerDown(e, idx)}
+                              onPointerMove={(e) => handleSpotPointerMove(e, idx)}
+                              onPointerUp={(e) => handleSpotPointerUp(e, idx)}
+                              onClick={(e) => {
+                                e.stopPropagation();
                               }}
                             >
-                              <span className="scale-75 bg-slate-900 border border-white rounded-full w-5 h-5 flex items-center justify-center shadow-md font-mono">
+                              <span className="scale-[0.8] bg-slate-900 border border-white rounded-full w-5 h-5 flex items-center justify-center shadow-md font-mono select-none pointer-events-none">
                                 {idx + 1}
+                              </span>
+                              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block bg-slate-800 text-white text-[9px] px-1.5 py-0.5 rounded shadow pointer-events-none whitespace-nowrap">
+                                Kéo để di chuyển
                               </span>
                             </div>
                           ))}

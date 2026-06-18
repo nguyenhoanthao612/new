@@ -14,7 +14,8 @@ import {
   addDoc, 
   onSnapshot,
   deleteDoc,
-  updateDoc
+  updateDoc,
+  setDoc
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import { UserProgress, ExamRecord, Classroom, UploadedDocument, IC3Question, SAMPLE_QUESTIONS, TestSet } from "./ic3data";
@@ -329,6 +330,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
           passingScore: Number(data.passingScore) || 700,
           createdAt: data.createdAt || Date.now(),
           updatedAt: data.updatedAt || Date.now(),
+          deleted: data.deleted || false,
         } as TestSet);
       });
       setDbTestSets(list);
@@ -341,12 +343,17 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
   // Merge dbTestSets with DEFAULT_TEST_SETS
   useEffect(() => {
     const combined = [...DEFAULT_TEST_SETS];
+    const deletedIds = new Set(
+      dbTestSets.filter((d) => d.deleted).map((d) => d.id)
+    );
+    const filteredCombined = combined.filter((c) => !deletedIds.has(c.id));
+
     dbTestSets.forEach((d) => {
-      if (!combined.some((c) => c.id === d.id)) {
-        combined.push(d);
+      if (!d.deleted && !filteredCombined.some((c) => c.id === d.id)) {
+        filteredCombined.push(d);
       }
     });
-    setTestSets(combined);
+    setTestSets(filteredCombined);
   }, [dbTestSets]);
 
   // If Firestore is empty, fall back to SAMPLE_QUESTIONS. Once there are questions in Firestore, use only Firestore.
@@ -642,7 +649,19 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
   const deleteTestSet = async (tId: string) => {
     if (isUserAdmin(firebaseUser)) {
       try {
-        await deleteDoc(doc(db, "testSets", tId));
+        const isStaticDefault = DEFAULT_TEST_SETS.some((item) => item.id === tId);
+        if (isStaticDefault) {
+          const staticItem = DEFAULT_TEST_SETS.find((item) => item.id === tId);
+          await setDoc(doc(db, "testSets", tId), {
+            id: tId,
+            title: staticItem?.title || "",
+            level: staticItem?.level || "cf",
+            deleted: true,
+            updatedAt: Date.now()
+          });
+        } else {
+          await deleteDoc(doc(db, "testSets", tId));
+        }
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `testSets/${tId}`);
       }
