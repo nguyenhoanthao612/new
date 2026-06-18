@@ -26,7 +26,8 @@ import {
   ArrowUp,
   ArrowDown,
   MapPin,
-  RotateCw
+  RotateCw,
+  GripVertical
 } from "lucide-react";
 
 interface PracticeModuleProps {
@@ -41,6 +42,69 @@ interface SessionQuestion {
   explanation: string;
   shuffledOptions: string[];
   correctIndexInShuffled: number;
+}
+
+export function checkAnswerCorrectness(q: IC3Question, correctIndexInShuffled: number, userAns: any): boolean {
+  const type = q.questionType;
+
+  if (type === "Multiple Select") {
+    const correctIndices = q.correctIndicesMulti || [];
+    const userIndices = Array.isArray(userAns) ? userAns : [];
+    const correctNum = correctIndices.map(Number);
+    const userNum = userIndices.map(Number);
+    return correctNum.length === userNum.length && correctNum.every(idx => userNum.includes(idx));
+  }
+
+  if (type === "True / False Single") {
+    return (q.correctAnswerBool === true && userAns === "Đúng") || (q.correctAnswerBool === false && userAns === "Sai");
+  }
+
+  if (type === "True / False Multiple") {
+    const statements = q.statements || [];
+    const userTF = userAns || {};
+    if (statements.length === 0) return true;
+    return statements.every((stmt, idx) => userTF[idx] === stmt.answer);
+  }
+
+  if (type === "Matching") {
+    const pairs = q.matchingPairs || [];
+    const userMatch = userAns || {};
+    if (pairs.length === 0) return true;
+    return pairs.every((pair) => userMatch[pair.left] === pair.right);
+  }
+
+  if (type === "Fill In The Blank") {
+    const correctBlanks = (q.correctAnswersBlank || []).map(s => String(s).trim().toLowerCase());
+    const userBlank = String(userAns || "").trim().toLowerCase();
+    return correctBlanks.length > 0 && correctBlanks.includes(userBlank);
+  }
+
+  if (type === "Drag And Drop") {
+    const targets = q.dragTargets || [];
+    const userDrag = userAns || {};
+    if (targets.length === 0) return true;
+    return targets.every((tgt, idx) => userDrag[idx] === tgt.expectedItem);
+  }
+
+  if (type === "Hotspot") {
+    const userClicks = Array.isArray(userAns) ? userAns : [];
+    const spots = q.hotspots || [];
+    if (spots.length === 0) return true;
+    return spots.every(spot => {
+      return userClicks.some((click: any) => {
+        const distance = Math.sqrt(Math.pow(click.x - spot.x, 2) + Math.pow(click.y - spot.y, 2));
+        return distance <= spot.radius;
+      });
+    }) && userClicks.length === spots.length;
+  }
+
+  if (type === "Ordering / Sequence" || type === "Ordering") {
+    const userSeq = Array.isArray(userAns) ? userAns : [];
+    const correctSeq = q.options || q.correctSequence || [];
+    return userSeq.length === correctSeq.length && userSeq.every((val: string, index: number) => val === correctSeq[index]);
+  }
+
+  return userAns === correctIndexInShuffled;
 }
 
 export default function PracticeModule({ onBackToHome, onStartExam }: PracticeModuleProps) {
@@ -62,6 +126,57 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
   // Interaction answers
   const [chosenOptionIndex, setChosenOptionIndex] = useState<number | null>(null);
   const [isAnswered, setIsAnswered] = useState(false);
+  const [activeDragItem, setActiveDragItem] = useState<string | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  const hasAnsweredActiveQuestion = () => {
+    if (!sessionQuestions[currentQuestionIndex]) return false;
+    const activeQuestion = sessionQuestions[currentQuestionIndex];
+    const q = activeQuestion.originalQuestion;
+    const type = q.questionType;
+    const ans = testAnswers[currentQuestionIndex];
+    
+    if (type === "Multiple Choice" || type === "Video Based" || !type) {
+      return chosenOptionIndex !== null;
+    }
+    if (type === "Multiple Select") {
+      return Array.isArray(ans) && ans.length > 0;
+    }
+    if (type === "True / False Single") {
+      return ans === "Đúng" || ans === "Sai";
+    }
+    if (type === "True / False Multiple") {
+      const stmtList = q.statements || [];
+      const userTF = ans || {};
+      return stmtList.length > 0 && stmtList.every((_, idx) => userTF[idx] !== undefined);
+    }
+    if (type === "Matching") {
+      const matchPairs = q.matchingPairs || [];
+      const userMatch = ans || {};
+      return matchPairs.length > 0 && matchPairs.every((pair) => userMatch[pair.left] !== undefined && userMatch[pair.left] !== "");
+    }
+    if (type === "Fill In The Blank") {
+      return ans !== undefined && String(ans).trim() !== "";
+    }
+    if (type === "Drag And Drop") {
+      const targets = q.dragTargets || [];
+      const userDrag = ans || {};
+      return targets.length > 0 && Object.keys(userDrag).length > 0;
+    }
+    if (type === "Hotspot") {
+      const clicks = ans || [];
+      return clicks.length > 0;
+    }
+    if (type === "Ordering / Sequence" || type === "Ordering") {
+      return Array.isArray(ans) && ans.length > 0;
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    setChosenOptionIndex(null);
+    setActiveDragItem(null);
+  }, [currentQuestionIndex]);
 
   // A. Training Mode States
   const [practiceScore, setPracticeScore] = useState({ correct: 0, total: 0 });
@@ -138,7 +253,8 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     // Prepare questions with shuffled options
     const preparedQuestions: SessionQuestion[] = rawList.map((q) => {
       // Generate randomized indices for option shuffling
-      const pairs = q.options.map((opt, oIdx) => ({ opt, originalIdx: oIdx }));
+      const optionsArray = Array.isArray(q.options) ? q.options : [];
+      const pairs = optionsArray.map((opt, oIdx) => ({ opt, originalIdx: oIdx }));
       for (let i = pairs.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [pairs[i], pairs[j]] = [pairs[j], pairs[i]];
@@ -201,25 +317,12 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     if (isAnswered || !activeQuestion) return;
 
     const q = activeQuestion.originalQuestion;
+    const userAnsObj = testAnswers[currentQuestionIndex];
     let isCorrect = false;
 
-    if (q.questionType === "Hotspot") {
-      const userClicks = Array.isArray(testAnswers[currentQuestionIndex]) ? (testAnswers[currentQuestionIndex] as any[]) : [];
-      const spots = q.hotspots || [];
-      if (spots.length === 0) {
-        isCorrect = true;
-      } else {
-        isCorrect = spots.every(spot => {
-          return userClicks.some((click: any) => {
-            const distance = Math.sqrt(Math.pow(click.x - spot.x, 2) + Math.pow(click.y - spot.y, 2));
-            return distance <= spot.radius;
-          });
-        }) && userClicks.length === spots.length;
-      }
-    } else if (q.questionType === "Ordering / Sequence" || q.questionType === "Ordering") {
-      const userSeq = Array.isArray(testAnswers[currentQuestionIndex]) ? (testAnswers[currentQuestionIndex] as string[]) : [];
-      const correctSeq = q.options || q.correctSequence || [];
-      isCorrect = userSeq.length === correctSeq.length && userSeq.every((val: string, index: number) => val === correctSeq[index]);
+    // Use our beautiful unified dynamic correctness grader
+    if (q.questionType && q.questionType !== "Multiple Choice" && q.questionType !== "Video Based") {
+      isCorrect = checkAnswerCorrectness(q, activeQuestion.correctIndexInShuffled, userAnsObj);
     } else {
       if (chosenOptionIndex === null) return;
       isCorrect = chosenOptionIndex === activeQuestion.correctIndexInShuffled;
@@ -275,7 +378,8 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
       const targetTestSetId = selectedTestSetId || `default_${selectedModule}`;
       const rawList = questions.filter((q) => q.testSetId === targetTestSetId);
       const rePrepared: SessionQuestion[] = rawList.map((q) => {
-        const pairs = q.options.map((opt, oIdx) => ({ opt, originalIdx: oIdx }));
+        const optionsArray = Array.isArray(q.options) ? q.options : [];
+        const pairs = optionsArray.map((opt, oIdx) => ({ opt, originalIdx: oIdx }));
         for (let i = pairs.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [pairs[i], pairs[j]] = [pairs[j], pairs[i]];
@@ -334,29 +438,10 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     let correct = 0;
     sessionQuestions.forEach((sq, index) => {
       const q = sq.originalQuestion;
-      if (q.questionType === "Hotspot") {
-        const userClicks = Array.isArray(testAnswers[index]) ? (testAnswers[index] as any[]) : [];
-        const spots = q.hotspots || [];
-        if (spots.length === 0) {
-          correct++;
-        } else {
-          const allHit = spots.every(spot => {
-            return userClicks.some((click: any) => {
-              const distance = Math.sqrt(Math.pow(click.x - spot.x, 2) + Math.pow(click.y - spot.y, 2));
-              return distance <= spot.radius;
-            });
-          }) && userClicks.length === spots.length;
-          if (allHit) correct++;
-        }
-      } else if (q.questionType === "Ordering / Sequence" || q.questionType === "Ordering") {
-        const userSeq = Array.isArray(testAnswers[index]) ? (testAnswers[index] as string[]) : [];
-        const correctSeq = q.options || q.correctSequence || [];
-        const allCorrect = userSeq.length === correctSeq.length && userSeq.every((val: string, iIdx: number) => val === correctSeq[iIdx]);
-        if (allCorrect) correct++;
-      } else {
-        if (testAnswers[index] === sq.correctIndexInShuffled) {
-          correct++;
-        }
+      const userAns = testAnswers[index];
+      const isCorrect = checkAnswerCorrectness(q, sq.correctIndexInShuffled, userAns);
+      if (isCorrect) {
+        correct++;
       }
     });
 
@@ -633,7 +718,9 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               .map((mod) => {
                 const style = getLevelStyles(mod.id);
                 const countOfQ = questions.filter(q => q.module === mod.id).length;
-                const levelCustomSets = (testSets || []).filter((ts) => ts.level === mod.id && !ts.id.startsWith("default_"));
+                const levelCustomSets = (testSets || [])
+                  .filter((ts) => ts.level === mod.id && !ts.id.startsWith("default_"))
+                  .sort((a, b) => a.title.localeCompare(b.title, "vi", { numeric: true, sensitivity: "base" }));
 
                 return (
                   <div key={mod.id} className="space-y-4 text-left border-b border-slate-100 pb-8 last:border-0 last:pb-0" id={`group-level-${mod.id}`}>
@@ -649,172 +736,104 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                         </h3>
                       </div>
                       <span className="text-[11px] font-bold text-slate-400">
-                        {1 + levelCustomSets.length} bài ôn tập
+                        {levelCustomSets.length} bài ôn tập
                       </span>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                      {/* 1. Standard module practice card */}
-                      <div
-                        className={`border rounded-2xl p-5 md:p-6 bg-white transition flex flex-col justify-between ${style.border}`}
-                      >
-                        <div className="space-y-4">
-                          <div className="flex justify-between items-center">
-                            {getLevelBadge(mod.id)}
-                            <span className="text-[10px] text-slate-400 font-extrabold font-mono bg-slate-50 px-2 py-0.5 rounded">
-                              {countOfQ} câu hỏi mẫu
-                            </span>
-                          </div>
-
-                          <div className="space-y-1.5">
-                            <h4 className="font-extrabold font-display text-slate-900 text-sm leading-snug">
-                              Bài Luyện Tập Tổng Hợp
-                            </h4>
-                            <p className="text-slate-500 text-xs leading-relaxed min-h-[48px] line-clamp-3">
-                              {mod.description}
-                            </p>
-                          </div>
+                      {/* Custom dynamic testSets from Firestore aligned inside the same group */}
+                      {levelCustomSets.length === 0 ? (
+                        <div className="col-span-full py-8 text-center bg-slate-50 border border-slate-150 rounded-2xl">
+                          <p className="text-slate-400 text-xs italic">Chưa có đề ôn luyện nào cho cấp độ này.</p>
                         </div>
+                      ) : (
+                        levelCustomSets.map((ts) => {
+                          const tsQuestionsCount = questions.filter((q) => q.testSetId === ts.id).length;
+                          const testRecords = examRecords.filter((r) => r.testSetId === ts.id);
+                          const bestScore = testRecords.length > 0 ? Math.max(...testRecords.map((r) => r.score)) : null;
 
-                        <div className="pt-5 border-t border-slate-50 mt-4 font-sans">
-                          {activeTab === "training" && (
-                            <div className="space-y-2">
-                              <p className="text-[9px] text-emerald-600 font-semibold flex items-center justify-center gap-0.5">
-                                <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                                Đánh giá ngay, có giải đáp chi tiết
-                              </p>
-                              <button
-                                id={`btn-training-trigger-${mod.id}`}
-                                onClick={() => handleStartSession(mod.id, "training")}
-                                className="w-full py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black border border-emerald-200 rounded-xl text-xs transition shadow-sm cursor-pointer"
-                              >
-                                Bắt đầu Training
-                              </button>
-                            </div>
-                          )}
+                          return (
+                            <div
+                              key={ts.id}
+                              className={`border rounded-2xl p-5 md:p-6 bg-white transition flex flex-col justify-between ${style.border}`}
+                              id={`practice-test-card-${ts.id}`}
+                            >
+                              <div className="space-y-4">
+                                <div className="flex justify-between items-center">
+                                  {getLevelBadge(mod.id)}
+                                  {bestScore !== null && bestScore >= (ts.passingScore || 700) ? (
+                                    <span className="text-[9px] bg-emerald-50 text-emerald-700 font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5 border border-emerald-100">
+                                      <Check className="w-3 h-3 text-emerald-500" />
+                                      Đã Đạt ({bestScore}đ)
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-400 font-extrabold font-mono bg-slate-50 px-2 py-0.5 rounded">
+                                      {tsQuestionsCount} câu hỏi
+                                    </span>
+                                  )}
+                                </div>
 
-                          {activeTab === "testing" && (
-                            <div className="space-y-2">
-                              <p className="text-[9px] text-indigo-600 font-semibold flex items-center justify-center gap-0.5">
-                                <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                                Hồi giờ 50 phút - Giả lập chuẩn
-                              </p>
-                              <button
-                                id={`btn-testing-trigger-${mod.id}`}
-                                onClick={() => handleStartSession(mod.id, "testing")}
-                                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
-                              >
-                                <Play className="w-3 px-0.5 h-3 fill-white shrink-0" />
-                                Luyện Đề Testing
-                              </button>
-                            </div>
-                          )}
+                                <div className="space-y-1.5 text-left">
+                                  <h4 className="font-extrabold font-display text-slate-900 text-sm leading-snug line-clamp-1">
+                                    {ts.title}
+                                  </h4>
+                                  <p className="text-slate-500 text-xs leading-relaxed min-h-[48px] line-clamp-3">
+                                    {ts.description || "Bài ôn tập bám sát thực tế giúp ôn luyện và khắc sâu kiến thức trọng tâm học phần."}
+                                  </p>
+                                </div>
+                              </div>
 
-                          {activeTab === "race" && (
-                            <div className="space-y-2">
-                              <p className="text-[9px] text-rose-600 font-semibold flex items-center justify-center gap-0.5 animate-pulse">
-                                <Flame className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                                Sai một câu là loại trực tiếp!
-                              </p>
-                              <button
-                                id={`btn-race-trigger-${mod.id}`}
-                                onClick={() => handleStartSession(mod.id, "race")}
-                                className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
-                              >
-                                Thử Thách Race
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                              <div className="pt-5 border-t border-slate-50 mt-4 font-sans">
+                                {activeTab === "training" && (
+                                  <div className="space-y-2">
+                                    <p className="text-[9px] text-emerald-600 font-semibold flex items-center justify-center gap-0.5">
+                                      <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                      Đánh giá ngay, có giải đáp chi tiết
+                                    </p>
+                                    <button
+                                      onClick={() => handleStartSession(mod.id, "training", ts.id)}
+                                      className="w-full py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black border border-emerald-200 rounded-xl text-xs transition shadow-sm cursor-pointer"
+                                    >
+                                      Bắt đầu Training
+                                    </button>
+                                  </div>
+                                )}
 
-                      {/* 2. Custom dynamic testSets from Firestore aligned inside the same group */}
-                      {levelCustomSets.map((ts) => {
-                        const tsQuestionsCount = questions.filter((q) => q.testSetId === ts.id).length;
-                        const testRecords = examRecords.filter((r) => r.testSetId === ts.id);
-                        const bestScore = testRecords.length > 0 ? Math.max(...testRecords.map((r) => r.score)) : null;
+                                {activeTab === "testing" && (
+                                  <div className="space-y-2">
+                                    <p className="text-[9px] text-indigo-600 font-semibold flex items-center justify-center gap-0.5">
+                                      <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                                      Hồi giờ 50 phút - Giả lập chuẩn
+                                    </p>
+                                    <button
+                                      onClick={() => handleStartSession(mod.id, "testing", ts.id)}
+                                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <Play className="w-3 px-0.5 h-3 fill-white shrink-0" />
+                                      Luyện Đề Testing
+                                    </button>
+                                  </div>
+                                )}
 
-                        return (
-                          <div
-                            key={ts.id}
-                            className={`border rounded-2xl p-5 md:p-6 bg-white transition flex flex-col justify-between ${style.border}`}
-                            id={`practice-test-card-${ts.id}`}
-                          >
-                            <div className="space-y-4">
-                              <div className="flex justify-between items-center">
-                                {getLevelBadge(mod.id)}
-                                {bestScore !== null && bestScore >= (ts.passingScore || 700) ? (
-                                  <span className="text-[9px] bg-emerald-50 text-emerald-700 font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5 border border-emerald-100">
-                                    <Check className="w-3 h-3 text-emerald-500" />
-                                    Đã Đạt ({bestScore}đ)
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px] text-slate-400 font-extrabold font-mono bg-slate-50 px-2 py-0.5 rounded">
-                                    {tsQuestionsCount} câu hỏi
-                                  </span>
+                                {activeTab === "race" && (
+                                  <div className="space-y-2">
+                                    <p className="text-[9px] text-rose-600 font-semibold flex items-center justify-center gap-0.5 animate-pulse">
+                                      <Flame className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                                      Sai một câu là loại trực tiếp!
+                                    </p>
+                                    <button
+                                      onClick={() => handleStartSession(mod.id, "race", ts.id)}
+                                      className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      Thử Thách Race
+                                    </button>
+                                  </div>
                                 )}
                               </div>
-
-                              <div className="space-y-1.5 text-left">
-                                <h4 className="font-extrabold font-display text-slate-900 text-sm leading-snug line-clamp-1">
-                                  {ts.title}
-                                </h4>
-                                <p className="text-slate-500 text-xs leading-relaxed min-h-[48px] line-clamp-3">
-                                  {ts.description || "Bài ôn tập bám sát thực tế giúp ôn luyện và khắc sâu kiến thức trọng tâm học phần."}
-                                </p>
-                              </div>
                             </div>
-
-                            <div className="pt-5 border-t border-slate-50 mt-4 font-sans">
-                              {activeTab === "training" && (
-                                <div className="space-y-2">
-                                  <p className="text-[9px] text-emerald-600 font-semibold flex items-center justify-center gap-0.5">
-                                    <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                                    Đánh giá ngay, có giải đáp chi tiết
-                                  </p>
-                                  <button
-                                    onClick={() => handleStartSession(mod.id, "training", ts.id)}
-                                    className="w-full py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black border border-emerald-200 rounded-xl text-xs transition shadow-sm cursor-pointer"
-                                  >
-                                    Bắt đầu Training
-                                  </button>
-                                </div>
-                              )}
-
-                              {activeTab === "testing" && (
-                                <div className="space-y-2">
-                                  <p className="text-[9px] text-indigo-600 font-semibold flex items-center justify-center gap-0.5">
-                                    <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                                    Hồi giờ 50 phút - Giả lập chuẩn
-                                  </p>
-                                  <button
-                                    onClick={() => handleStartSession(mod.id, "testing", ts.id)}
-                                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
-                                  >
-                                    <Play className="w-3 px-0.5 h-3 fill-white shrink-0" />
-                                    Luyện Đề Testing
-                                  </button>
-                                </div>
-                              )}
-
-                              {activeTab === "race" && (
-                                <div className="space-y-2">
-                                  <p className="text-[9px] text-rose-600 font-semibold flex items-center justify-center gap-0.5 animate-pulse">
-                                    <Flame className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                                    Sai một câu là loại trực tiếp!
-                                  </p>
-                                  <button
-                                    onClick={() => handleStartSession(mod.id, "race", ts.id)}
-                                    className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition shadow flex items-center justify-center gap-1 cursor-pointer"
-                                  >
-                                    Thử Thách Race
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })
+                      )}
                     </div>
                   </div>
                 );
@@ -898,7 +917,505 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
           {/* Dynamic Options and Interactivity Block */}
           {(() => {
             const q = activeQuestion.originalQuestion;
-            
+            const isTesting = false;
+
+            if (q.questionType === "Video Based" && q.videoUrl) {
+              const videoIdMatch = q.videoUrl.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/ ]{11})/);
+              const embedUrl = videoIdMatch ? `https://www.youtube.com/embed/${videoIdMatch[1]}` : null;
+
+              return (
+                <div className="space-y-4 text-left" id="practice-video-block">
+                  <div className="bg-slate-100 p-4 rounded-xl border border-slate-200">
+                    <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block mb-2">Học liệu Video mô phỏng</span>
+                    {embedUrl ? (
+                      <div className="aspect-video w-full rounded-lg overflow-hidden bg-black shadow-inner">
+                        <iframe
+                          src={embedUrl}
+                          className="w-full h-full border-0"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                        />
+                      </div>
+                    ) : (
+                      <div className="aspect-video w-full rounded-lg bg-slate-950 flex flex-col items-center justify-center text-slate-500 text-xs">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src="https://picsum.photos/seed/ic3video/800/400" alt="Video cover placeholders" className="opacity-25 w-full h-full object-cover rounded" />
+                        <span className="absolute">Mô phỏng: {q.videoUrl}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Options options selection */}
+                  <div className="grid grid-cols-1 gap-3 text-left">
+                    {activeQuestion.shuffledOptions.map((opt, idx) => {
+                      const isCorrectOpt = idx === activeQuestion.correctIndexInShuffled;
+                      const isChosen = idx === chosenOptionIndex;
+
+                      let btnStyle = "border-slate-200 hover:bg-slate-50 bg-white text-slate-700";
+                      let badgeStyle = "bg-slate-100 border-slate-200 text-slate-500 font-bold";
+
+                      if (isAnswered) {
+                        if (isCorrectOpt) {
+                          btnStyle = "bg-emerald-50 border-emerald-400 text-emerald-950";
+                          badgeStyle = "bg-emerald-600 border-emerald-500 text-white font-extrabold";
+                        } else if (isChosen) {
+                          btnStyle = "bg-rose-50 border-rose-400 text-rose-950 font-mono";
+                          badgeStyle = "bg-rose-600 border-rose-500 text-white font-extrabold";
+                        } else {
+                          btnStyle = "opacity-40 bg-white border-slate-100 text-slate-350 cursor-not-allowed";
+                          badgeStyle = "bg-slate-50 border-slate-100 text-slate-300 font-medium";
+                        }
+                      } else if (isChosen) {
+                        btnStyle = "bg-indigo-50/70 border-indigo-400 text-indigo-950 font-semibold ring-1 ring-indigo-400";
+                        badgeStyle = "bg-indigo-600 border-indigo-500 text-white font-extrabold";
+                      }
+
+                      return (
+                        <button
+                          key={idx}
+                          id={`practice-module-opt-${idx}`}
+                          disabled={isAnswered}
+                          onClick={() => handleOptionClick(idx)}
+                          className={`flex items-start text-left gap-4 p-4 border rounded-xl font-medium text-xs md:text-sm transition duration-150 cursor-pointer ${btnStyle}`}
+                        >
+                          <span className={`w-5.5 h-5.5 rounded-full flex items-center justify-center text-xs border shrink-0 font-mono ${badgeStyle}`}>
+                            {isAnswered && isCorrectOpt ? (
+                              <Check className="w-3.5 h-3.5" />
+                            ) : isAnswered && isChosen ? (
+                              <X className="w-3.5 h-3.5" />
+                            ) : (
+                              String.fromCharCode(65 + idx)
+                            )}
+                          </span>
+                          <span className={isAnswered && isCorrectOpt ? 'font-bold' : ''}>{opt}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Multiple Select") {
+              const charOf = (i: number) => String.fromCharCode(65 + i);
+              const userAnswersList = Array.isArray(testAnswers[currentQuestionIndex]) 
+                ? (testAnswers[currentQuestionIndex] as number[]) 
+                : [];
+              const optionsCount = q.options && q.options.length > 0
+                ? q.options.length
+                : [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean).length;
+              const loopIndices = Array.from({ length: optionsCount }, (_, i) => i);
+
+              return (
+                <div className="space-y-3 text-left font-sans" id="practice-multiselect-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
+                    ⚠️ <strong>Lựa chọn nhiều phương án:</strong> Nhấp chọn tất cả câu trả lời Đúng, sau đó bấm Xác nhận.
+                  </div>
+
+                  <div className="space-y-3">
+                    {loopIndices.map((idx) => {
+                      const optText = q[`option${charOf(idx)}` as any] || q.options?.[idx];
+                      if (!optText) return null;
+
+                      const isSelected = userAnswersList.includes(idx);
+                      const correctIndices = q.correctIndicesMulti || [];
+                      const isCorrectOption = correctIndices.includes(idx);
+
+                      let itemStyle = "bg-white border-slate-200 text-slate-700 hover:bg-slate-50";
+                      if (isAnswered) {
+                        if (isCorrectOption) {
+                          itemStyle = "bg-emerald-50 border-emerald-400 text-emerald-950 font-semibold";
+                        } else if (isSelected) {
+                          itemStyle = "bg-rose-50 border-rose-400 text-rose-950";
+                        } else {
+                          itemStyle = "opacity-40 bg-zinc-50 border-zinc-100 text-zinc-350 cursor-not-allowed";
+                        }
+                      } else if (isSelected) {
+                        itemStyle = "bg-indigo-50 border-indigo-400 text-indigo-950 ring-1 ring-indigo-400 font-semibold";
+                      }
+
+                      return (
+                        <button
+                          key={idx}
+                          disabled={isAnswered}
+                          onClick={() => {
+                            let updated = [...userAnswersList];
+                            if (updated.includes(idx)) {
+                              updated = updated.filter(i => i !== idx);
+                            } else {
+                              updated = [...updated, idx].sort();
+                            }
+                            setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                          }}
+                          className={`w-full flex items-center justify-between p-4 rounded-xl text-xs md:text-sm border transition duration-150 cursor-pointer ${itemStyle}`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className={`w-5.5 h-5.5 rounded flex items-center justify-center text-xs font-mono shrink-0 border transition ${
+                              isSelected 
+                                ? "bg-indigo-600 border-indigo-500 text-white" 
+                                : "bg-slate-50 border-slate-200 text-slate-500"
+                            }`}>
+                              {isSelected ? <Check className="w-3.5 h-3.5" /> : charOf(idx)}
+                            </span>
+                            <span className="text-left font-semibold">{optText}</span>
+                          </div>
+                          {isAnswered && isCorrectOption && (
+                            <span className="text-[10px] text-emerald-700 font-black bg-emerald-100 px-2.5 py-0.5 rounded border border-emerald-200 shrink-0">ĐÁP ÁN ĐÚNG</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "True / False Single") {
+              const options = ["Đúng", "Sai"];
+              return (
+                <div className="space-y-4 font-sans text-left" id="practice-tf-single-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
+                    🔍 <strong>Kiểm định Đúng / Sai:</strong> Xác thực khẳng định trên là Đúng (True) hay Sai (False).
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    {options.map((choice) => {
+                      const isSelected = testAnswers[currentQuestionIndex] === choice;
+                      const isCorrectChoice = (q.correctAnswerBool && choice === "Đúng") || (!q.correctAnswerBool && choice === "Sai");
+
+                      let itemStyle = "bg-white border-slate-200 text-slate-700 hover:bg-slate-50";
+                      if (isAnswered) {
+                        if (isCorrectChoice) {
+                          itemStyle = "bg-emerald-50 border-emerald-400 text-emerald-950 font-bold";
+                        } else if (isSelected) {
+                          itemStyle = "bg-rose-50 border-rose-400 text-rose-950 font-bold";
+                        } else {
+                          itemStyle = "opacity-45 bg-zinc-50 border-zinc-100 text-zinc-300 cursor-not-allowed";
+                        }
+                      } else if (isSelected) {
+                        itemStyle = choice === "Đúng"
+                          ? "border-2 border-emerald-600 bg-emerald-50 text-emerald-950 font-bold"
+                          : "border-2 border-rose-600 bg-rose-50 text-rose-950 font-bold";
+                      }
+
+                      return (
+                        <button
+                          key={choice}
+                          disabled={isAnswered}
+                          onClick={() => {
+                            setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: choice }));
+                          }}
+                          className={`p-6 rounded-2xl text-center text-sm md:text-base border transition font-bold cursor-pointer ${itemStyle}`}
+                        >
+                          {choice}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "True / False Multiple") {
+              return (
+                <div className="space-y-4 font-sans text-left" id="practice-tf-multiple-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
+                    📋 <strong>Mảng kiểm định Đúng / Sai song song:</strong> Chọn Đúng hoặc Sai riêng rẽ cho từng khẳng định bên cạnh.
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl divide-y divide-slate-150 overflow-hidden text-xs md:text-sm">
+                    {(q.statements || []).map((stmtItem: any, idx: number) => {
+                      const userTFAnswers = (testAnswers[currentQuestionIndex] as Record<number, boolean>) || {};
+                      const isSelectedTrue = userTFAnswers[idx] === true;
+                      const isSelectedFalse = userTFAnswers[idx] === false;
+                      
+                      const isCorrectTrue = stmtItem.answer === true;
+                      const isCorrectFalse = stmtItem.answer === false;
+
+                      return (
+                        <div key={idx} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white">
+                          <div className="flex-1 font-semibold text-slate-800 leading-relaxed">
+                            <span className="font-extrabold text-indigo-600 mr-2">{idx + 1}.</span>
+                            {stmtItem.statement}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              disabled={isAnswered}
+                              onClick={() => {
+                                const updated = { ...userTFAnswers, [idx]: true };
+                                setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                              }}
+                              className={`px-4 py-1.5 rounded-lg text-xs font-bold border transition duration-150 ${
+                                isSelectedTrue
+                                  ? "bg-emerald-600 border-emerald-500 text-white"
+                                  : isAnswered && isCorrectTrue
+                                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                                  : "border-slate-250 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                              }`}
+                            >
+                              Đúng
+                            </button>
+                            <button
+                              disabled={isAnswered}
+                              onClick={() => {
+                                const updated = { ...userTFAnswers, [idx]: false };
+                                setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                              }}
+                              className={`px-4 py-1.5 rounded-lg text-xs font-bold border transition duration-150 ${
+                                isSelectedFalse
+                                  ? "bg-rose-600 border-rose-500 text-white"
+                                  : isAnswered && isCorrectFalse
+                                  ? "bg-rose-50 border-rose-300 text-rose-800"
+                                  : "border-slate-250 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                              }`}
+                            >
+                              Sai
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Matching") {
+              return (
+                <div className="space-y-4 font-sans text-left" id="practice-matching-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
+                    🖇️ <strong>Ghép cặp tương thích:</strong> Đồng bộ các khóa cột trái với phân loại cột phải tương ứng sử dụng menu xổ.
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-2xl divide-y divide-slate-100 overflow-hidden">
+                    {(q.matchingPairs || []).map((pair: any, idx: number) => {
+                      const userMatches = (testAnswers[currentQuestionIndex] as Record<string, string>) || {};
+                      const userMatchedVal = userMatches[pair.left] || "";
+                      const allRightTexts = Array.from(new Set((q.matchingPairs || []).map((p: any) => p.right))) as string[];
+
+                      const isCorrectMatch = userMatchedVal === pair.right;
+
+                      return (
+                        <div key={idx} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white">
+                          <span className="font-extrabold text-slate-800 truncate flex-1">{pair.left}</span>
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-slate-400 font-bold text-xs font-mono">Đồng bộ:</span>
+                            <select
+                              disabled={isAnswered}
+                              value={userMatchedVal}
+                              onChange={(e) => {
+                                const updated = { ...userMatches, [pair.left]: e.target.value };
+                                setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                              }}
+                              className={`p-2 rounded-xl text-xs font-bold border bg-white focus:outline-none min-w-[180px] cursor-pointer ${
+                                isAnswered 
+                                  ? isCorrectMatch 
+                                    ? "border-emerald-500 bg-emerald-50 text-emerald-950 font-bold"
+                                    : "border-rose-500 bg-rose-50 text-rose-950"
+                                  : "border-slate-250 text-slate-700"
+                              }`}
+                            >
+                              <option value="">-- Lựa chọn vế khớp --</option>
+                              {allRightTexts.map((txt) => (
+                                <option key={txt} value={txt}>{txt}</option>
+                              ))}
+                            </select>
+                            {isAnswered && (
+                              <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${
+                                isCorrectMatch ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
+                              }`}>
+                                {isCorrectMatch ? "ĐÚNG" : `SAI (Bản đúng: ${pair.right})`}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Fill In The Blank") {
+              const currentInputVal = testAnswers[currentQuestionIndex] === undefined ? "" : testAnswers[currentQuestionIndex];
+              return (
+                <div className="space-y-4 font-sans text-left" id="practice-blank-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
+                    ✍️ <strong>Điền vào ô trống:</strong> Nhập câu trả lời chính xác trực tiếp vào ô soạn thảo văn bản.
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-3.5">
+                    <input
+                      type="text"
+                      disabled={isAnswered}
+                      value={currentInputVal}
+                      onChange={(e) => {
+                        setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: e.target.value }));
+                      }}
+                      placeholder="Nhập câu trả lời chính xác của bạn tại đây..."
+                      className="w-full p-3.5 border border-slate-200 bg-white text-slate-800 font-semibold rounded-xl text-xs md:text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+
+                    {isAnswered && (
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-150 text-xs text-slate-600 leading-relaxed font-semibold">
+                        🔑 <strong>Các khế ước chấp nhận:</strong> <span className="text-emerald-700">{(q.correctAnswersBlank || []).join(" hoặc ")}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Drag And Drop") {
+              return (
+                <div className="space-y-5 font-sans text-left" id="practice-dragdrop-block">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
+                    🎯 <strong>Ghép thả nhãn (Drag & Drop):</strong> Click/Chọn một nhãn từ khay rồi click vào Hộp thả trống tương ứng thích hợp.
+                  </div>
+
+                  {/* Drag/Click items container */}
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col gap-2">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wide">Nhãn thả sẵn sàng:</span>
+                    <div className="flex flex-wrap gap-2.5 items-center mt-1">
+                      {(q.dragItems || []).map((itm: string) => {
+                        const assignedTargets = Object.values((testAnswers[currentQuestionIndex] as Record<number, string>) || {});
+                        const isAssigned = assignedTargets.includes(itm);
+                        const isSelected = activeDragItem === itm;
+
+                        return (
+                          <button
+                            key={itm}
+                            disabled={isAnswered || isAssigned}
+                            onClick={() => {
+                              setActiveDragItem(activeDragItem === itm ? null : itm);
+                            }}
+                            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition duration-150 ${
+                              isSelected
+                                ? "bg-indigo-600 border-indigo-500 text-white shadow-md scale-105"
+                                : isAssigned
+                                ? "opacity-30 bg-slate-100 border-slate-100 text-slate-300 cursor-not-allowed"
+                                : "bg-white border-slate-250 text-slate-700 hover:bg-slate-50"
+                            }`}
+                          >
+                            {itm}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Target slots drop zones code */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {(q.dragTargets || []).map((target: any, index: number) => {
+                      const dragMatches = (testAnswers[currentQuestionIndex] as Record<number, string>) || {};
+                      const placedVal = dragMatches[index];
+                      const isCorrectTarget = placedVal === target.expectedItem;
+
+                      return (
+                        <div
+                          key={index}
+                          className={`p-4 rounded-xl border flex flex-col justify-between ${
+                            isAnswered
+                              ? isCorrectTarget
+                                ? "border-emerald-400 bg-emerald-50 text-emerald-950"
+                                : "border-rose-400 bg-rose-50 text-rose-950"
+                              : "border-slate-200 bg-slate-50 hover:bg-slate-50/80 transition"
+                          }`}
+                        >
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 mb-1.5 block uppercase tracking-wide leading-none">{target.placeholder}</span>
+                            
+                            {/* Two optimization vectors: Drag-Click OR dynamic direct pick selection drop-down */}
+                            {!isAnswered && (
+                              <div className="mb-2">
+                                <select
+                                  value={placedVal || ""}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const updated = { ...dragMatches };
+                                    if (!val) {
+                                      delete updated[index];
+                                    } else {
+                                      // Remove prior duplicate assignments
+                                      Object.keys(updated).forEach((k) => {
+                                        if (updated[Number(k)] === val) {
+                                          delete updated[Number(k)];
+                                        }
+                                      });
+                                      updated[index] = val;
+                                    }
+                                    setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                                  }}
+                                  className="w-full text-xs font-bold text-slate-700 bg-white border border-slate-250 cursor-pointer p-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-150"
+                                >
+                                  <option value="">-- Click chọn nhanh thẻ --</option>
+                                  {(q.dragItems || []).map((itm: string) => (
+                                    <option key={itm} value={itm}>{itm}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="relative mt-1">
+                            {placedVal ? (
+                              <div className="flex items-center justify-between p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 font-bold text-xs text-indigo-950">
+                                <span className="font-semibold">{placedVal}</span>
+                                {!isAnswered && (
+                                  <button
+                                    onClick={() => {
+                                      const updated = { ...dragMatches };
+                                      delete updated[index];
+                                      setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                                    }}
+                                    className="text-slate-400 hover:text-slate-650 p-0.5 rounded cursor-pointer"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <button
+                                disabled={isAnswered}
+                                onClick={() => {
+                                  if (!activeDragItem) return;
+                                  const updated = { ...dragMatches };
+                                  // Remove any existing duplicate target placement
+                                  Object.keys(updated).forEach((k) => {
+                                    if (updated[Number(k)] === activeDragItem) {
+                                      delete updated[Number(k)];
+                                    }
+                                  });
+                                  updated[index] = activeDragItem;
+                                  setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                                  setActiveDragItem(null);
+                                }}
+                                className={`w-full py-3 border border-dashed rounded-lg flex items-center justify-center text-xs font-semibold cursor-pointer ${
+                                  activeDragItem
+                                    ? "border-indigo-400 bg-indigo-50 text-indigo-700 font-bold animate-pulse"
+                                    : "border-slate-300 bg-white text-slate-400 hover:bg-slate-50"
+                                }`}
+                              >
+                                {activeDragItem ? "Đặt nhãn đang chọn vào đây" : "[ Đặt bằng nút thẻ ở danh sách trên ]"}
+                              </button>
+                            )}
+                          </div>
+                          {isAnswered && (
+                            <span className={`text-[10px] font-extrabold mt-2.5 block leading-none ${
+                              isCorrectTarget ? "text-emerald-700" : "text-rose-700"
+                            }`}>
+                              {isCorrectTarget ? "✓ ĐÚNG CHUẨN" : `✕ ĐÁP ÁN ĐÚNG PHẢI LÀ: ${target.expectedItem}`}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
             if (q.questionType === "Hotspot") {
               const userClicks = Array.isArray(testAnswers[currentQuestionIndex]) ? (testAnswers[currentQuestionIndex] as any[]) : [];
               const spots = q.hotspots || [];
@@ -1018,15 +1535,16 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               return (
                 <div className="space-y-4 font-sans" id="practice-ordering-block">
                   <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 font-medium">
-                    🔢 <strong>Yêu cầu Sắp xếp:</strong> Drag / Sử dụng các nút mũi tên điều hướng để hoán đổi vị trí các bước theo quy chuẩn thao tác đúng nhất.
+                    🔢 <strong>Yêu cầu Sắp xếp:</strong> Hãy kéo thả (Drag and Drop) các thẻ hoặc chọn nút mũi tên để sắp đặt đúng thứ tự thao tác.
                   </div>
 
                   <div className="grid grid-cols-1 gap-2.5 text-left">
                     {currentList.map((item: string, idx: number) => {
                       const isMatching = isAnswered && correctList[idx] === item;
                       
-                      let cardStyle = "bg-white border-slate-200 text-slate-700";
+                      let cardStyle = "bg-white border-slate-200 text-slate-700 hover:border-slate-350 cursor-grab active:cursor-grabbing";
                       if (isAnswered) {
+                        cardStyle = "bg-white text-slate-700 border-slate-200";
                         if (isMatching) {
                           cardStyle = "bg-emerald-50 border-emerald-300 text-emerald-950";
                         } else {
@@ -1034,12 +1552,50 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                         }
                       }
 
+                      // Apply drag highlight styles
+                      const isDragOver = dragOverIdx === idx;
+                      const dynamicDragStyle = isDragOver && !isAnswered 
+                        ? "border-dashed border-indigo-500 bg-indigo-50/70 scale-[1.015] shadow-md ring-2 ring-indigo-500/20" 
+                        : "";
+
                       return (
                         <div
                           key={idx}
-                          className={`flex items-center justify-between gap-4 p-3 border rounded-xl shadow-sm transition duration-150 ${cardStyle}`}
+                          draggable={!isAnswered}
+                          onDragStart={(e) => {
+                            if (isAnswered) return;
+                            e.dataTransfer.setData("text/plain", idx.toString());
+                            e.dataTransfer.effectAllowed = "move";
+                          }}
+                          onDragOver={(e) => {
+                            if (isAnswered) return;
+                            e.preventDefault();
+                            setDragOverIdx(idx);
+                          }}
+                          onDragLeave={() => {
+                            setDragOverIdx(null);
+                          }}
+                          onDrop={(e) => {
+                            if (isAnswered) return;
+                            e.preventDefault();
+                            setDragOverIdx(null);
+                            const dragIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+                            if (isNaN(dragIdx) || dragIdx === idx) return;
+                            const updated = [...currentList];
+                            const itemToMove = updated[dragIdx];
+                            updated.splice(dragIdx, 1);
+                            updated.splice(idx, 0, itemToMove);
+                            setTestAnswers(prev => ({
+                              ...prev,
+                              [currentQuestionIndex]: updated
+                            }));
+                          }}
+                          className={`flex items-center justify-between gap-4 p-3 border rounded-xl shadow-sm transition-all duration-150 ${cardStyle} ${dynamicDragStyle}`}
                         >
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 flex-1">
+                            {!isAnswered && (
+                              <GripVertical className="w-4 h-4 text-slate-400 shrink-0" />
+                            )}
                             {/* Position Indicator Badge */}
                             <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold font-mono border shrink-0 ${
                               isAnswered
@@ -1050,15 +1606,16 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                             }`}>
                               {idx + 1}
                             </span>
-                            <span className="text-xs sm:text-sm font-semibold">{item}</span>
+                            <span className="text-xs sm:text-sm font-semibold select-none">{item}</span>
                           </div>
 
                           {/* Arrow swapping buttons */}
                           {!isAnswered && (
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 shrink-0">
                               <button
                                 disabled={idx === 0}
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   if (isAnswered) return;
                                   const updated = [...currentList];
                                   const temp = updated[idx];
@@ -1076,7 +1633,8 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                               </button>
                               <button
                                 disabled={idx === currentList.length - 1}
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   if (isAnswered) return;
                                   const updated = [...currentList];
                                   const temp = updated[idx];
@@ -1096,7 +1654,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                           )}
 
                           {isAnswered && (
-                            <div className="flex items-center gap-2 text-xs font-bold">
+                            <div className="flex items-center gap-2 text-xs font-bold shrink-0">
                               {isMatching ? (
                                 <span className="text-emerald-600 flex items-center gap-1 font-semibold bg-emerald-100/60 px-2 py-0.5 rounded-lg border border-emerald-200">
                                   <Check className="w-3.5 h-3.5" /> Đúng bước
@@ -1193,10 +1751,10 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               {!isAnswered ? (
                 <button
                   id="btn-prac-submit"
-                  disabled={chosenOptionIndex === null}
+                  disabled={!hasAnsweredActiveQuestion()}
                   onClick={handleSubmitAnswer}
                   className={`flex items-center gap-1.5 px-6 py-2.5 font-extrabold rounded-xl text-xs shadow transition cursor-pointer font-mono ${
-                    chosenOptionIndex !== null
+                    hasAnsweredActiveQuestion()
                       ? "bg-indigo-600 hover:bg-indigo-700 text-white"
                       : "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed shadow-none"
                   }`}
@@ -1309,6 +1867,410 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
           {sessionQuestions[currentQuestionIndex] && (() => {
             const sq = sessionQuestions[currentQuestionIndex];
             const q = sq.originalQuestion;
+            const isTesting = true;
+
+            if (q.questionType === "Video Based" && q.videoUrl) {
+              const videoIdMatch = q.videoUrl.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/ ]{11})/);
+              const embedUrl = videoIdMatch ? `https://www.youtube.com/embed/${videoIdMatch[1]}` : null;
+
+              return (
+                <div className="space-y-4 text-left" id="testing-video-block">
+                  <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-slate-300">
+                    <span className="text-[10px] uppercase font-black tracking-wider text-slate-500 block mb-2 font-mono">Học liệu chuyên ngành</span>
+                    {embedUrl ? (
+                      <div className="aspect-video w-full rounded-lg overflow-hidden bg-black shadow-inner">
+                        <iframe
+                          src={embedUrl}
+                          className="w-full h-full border-0"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                        />
+                      </div>
+                    ) : (
+                      <div className="aspect-video w-full rounded-lg bg-zinc-950 flex flex-col items-center justify-center text-slate-500 text-xs">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src="https://picsum.photos/seed/ic3video/800/400" alt="Video cover placeholders" className="opacity-20 w-full h-full object-cover rounded" />
+                        <span className="absolute">Video liên kết: {q.videoUrl}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Options selection */}
+                  <div className="grid grid-cols-1 gap-3 text-left">
+                    {sq.shuffledOptions.map((opt, idx) => {
+                      const isSelected = testAnswers[currentQuestionIndex] === idx;
+
+                      return (
+                        <button
+                          key={idx}
+                          id={`testing-video-opt-${idx}`}
+                          onClick={() => {
+                            setTestAnswers(prev => ({
+                              ...prev,
+                              [currentQuestionIndex]: idx
+                            }));
+                          }}
+                          className={`flex items-start gap-4 p-4 rounded-xl text-left font-medium text-xs md:text-sm border transition duration-150 cursor-pointer ${
+                            isSelected 
+                              ? "bg-indigo-950/65 border-indigo-500 text-indigo-100 ring-1 ring-indigo-500" 
+                              : "bg-slate-950/50 border-slate-800 text-slate-300 hover:bg-slate-800"
+                          }`}
+                        >
+                          <span className={`w-5.5 h-5.5 rounded-full flex items-center justify-center text-xs font-mono shrink-0 border transition ${
+                            isSelected 
+                              ? "bg-indigo-600 border-indigo-400 text-white" 
+                              : "bg-slate-900 border-slate-700 text-slate-400"
+                          }`}>
+                            {String.fromCharCode(65 + idx)}
+                          </span>
+                          <span>{opt}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Multiple Select") {
+              const charOf = (i: number) => String.fromCharCode(65 + i);
+              const userAnswersList = Array.isArray(testAnswers[currentQuestionIndex]) 
+                ? (testAnswers[currentQuestionIndex] as number[]) 
+                : [];
+              const optionsCount = q.options && q.options.length > 0
+                ? q.options.length
+                : [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean).length;
+              const loopIndices = Array.from({ length: optionsCount }, (_, i) => i);
+
+              return (
+                <div className="space-y-4 text-left font-sans" id="testing-multiselect-block">
+                  <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
+                    ⚠️ <strong>Chọn nhiều đáp án tốt nhất:</strong> Nhấp chọn tất cả câu trả lời có tính chuẩn xác cao, bạn có thể chọn một hoặc nhiều mục.
+                  </div>
+
+                  <div className="space-y-3">
+                    {loopIndices.map((idx) => {
+                      const optText = q[`option${charOf(idx)}` as any] || q.options?.[idx];
+                      if (!optText) return null;
+
+                      const isSelected = userAnswersList.includes(idx);
+
+                      return (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            let updated = [...userAnswersList];
+                            if (updated.includes(idx)) {
+                              updated = updated.filter(i => i !== idx);
+                            } else {
+                              updated = [...updated, idx].sort();
+                            }
+                            setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                          }}
+                          className={`w-full flex items-center gap-3 p-4 rounded-xl text-xs md:text-sm border transition duration-150 cursor-pointer ${
+                            isSelected
+                              ? "bg-indigo-950/65 border-indigo-500 text-indigo-100 ring-1 ring-indigo-500"
+                              : "bg-slate-950/50 border-slate-800 text-slate-300 hover:bg-slate-800"
+                          }`}
+                        >
+                          <span className={`w-5.5 h-5.5 rounded flex items-center justify-center text-xs font-mono shrink-0 border transition ${
+                            isSelected 
+                              ? "bg-indigo-600 border-indigo-400 text-white" 
+                              : "bg-slate-900 border-slate-700 text-slate-500"
+                          }`}>
+                            {isSelected ? <Check className="w-3.5 h-3.5" /> : charOf(idx)}
+                          </span>
+                          <span className="text-left font-semibold text-slate-300">{optText}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "True / False Single") {
+              const options = ["Đúng", "Sai"];
+              return (
+                <div className="space-y-4 font-sans text-left" id="testing-tf-single-block">
+                  <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
+                    🔍 <strong>Khẳng định đơn (True / False):</strong> Hãy bấm chọn Đúng hoặc Sai phù hợp với câu phát biểu trên.
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    {options.map((choice) => {
+                      const isSelected = testAnswers[currentQuestionIndex] === choice;
+
+                      return (
+                        <button
+                          key={choice}
+                          onClick={() => {
+                            setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: choice }));
+                          }}
+                          className={`p-6 rounded-2xl text-center text-sm md:text-base border transition font-bold cursor-pointer ${
+                            isSelected
+                              ? choice === "Đúng"
+                                ? "border-emerald-600 bg-emerald-950/50 text-emerald-300 font-bold ring-1 ring-emerald-500"
+                                : "border-rose-600 bg-rose-950/50 text-rose-300 font-bold ring-1 ring-rose-500"
+                              : "bg-slate-950/50 border-slate-800 text-slate-300 hover:bg-slate-800"
+                          }`}
+                        >
+                          {choice}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "True / False Multiple") {
+              return (
+                <div className="space-y-4 font-sans text-left" id="testing-tf-multiple-block">
+                  <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
+                    📋 <strong>Khảo sát khẳng định song song:</strong> Chọn Đúng hoặc Sai tương thích cho từng dòng văn bản bên dưới.
+                  </div>
+
+                  <div className="bg-slate-950/40 border border-slate-800 rounded-2xl divide-y divide-slate-850 overflow-hidden text-xs md:text-sm">
+                    {(q.statements || []).map((stmtItem: any, idx: number) => {
+                      const userTFAnswers = (testAnswers[currentQuestionIndex] as Record<number, boolean>) || {};
+                      const isSelectedTrue = userTFAnswers[idx] === true;
+                      const isSelectedFalse = userTFAnswers[idx] === false;
+
+                      return (
+                        <div key={idx} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900/40">
+                          <div className="flex-1 font-semibold text-slate-300 leading-relaxed">
+                            <span className="font-extrabold text-indigo-400 mr-2">{idx + 1}.</span>
+                            {stmtItem.statement}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                const updated = { ...userTFAnswers, [idx]: true };
+                                setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                              }}
+                              className={`px-4 py-1.5 rounded-lg text-xs font-bold border transition duration-150 ${
+                                isSelectedTrue
+                                  ? "bg-emerald-600 border-emerald-500 text-white"
+                                  : "border-slate-850 bg-slate-950 text-slate-400 hover:bg-slate-800"
+                              }`}
+                            >
+                              Đúng
+                            </button>
+                            <button
+                              onClick={() => {
+                                const updated = { ...userTFAnswers, [idx]: false };
+                                setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                              }}
+                              className={`px-4 py-1.5 rounded-lg text-xs font-bold border transition duration-150 ${
+                                isSelectedFalse
+                                  ? "bg-rose-600 border-rose-500 text-white"
+                                  : "border-slate-850 bg-slate-950 text-slate-400 hover:bg-slate-800"
+                              }`}
+                            >
+                              Sai
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Matching") {
+              return (
+                <div className="space-y-4 font-sans text-left" id="testing-matching-block">
+                  <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
+                    🖇️ <strong>Lập danh sách đối xứng:</strong> Nối cột từ khóa trái với thuật ngữ cột bên phải tương thích bằng menu thả lựa chọn.
+                  </div>
+
+                  <div className="bg-slate-950/40 border border-slate-800 rounded-2xl divide-y divide-slate-850 overflow-hidden">
+                    {(q.matchingPairs || []).map((pair: any, idx: number) => {
+                      const userMatches = (testAnswers[currentQuestionIndex] as Record<string, string>) || {};
+                      const userMatchedVal = userMatches[pair.left] || "";
+                      const allRightTexts = Array.from(new Set((q.matchingPairs || []).map((p: any) => p.right))) as string[];
+
+                      return (
+                        <div key={idx} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/30">
+                          <span className="font-extrabold text-slate-300 truncate flex-1">{pair.left}</span>
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-slate-500 font-bold text-xs font-mono">Ghép với:</span>
+                            <select
+                              value={userMatchedVal}
+                              onChange={(e) => {
+                                const updated = { ...userMatches, [pair.left]: e.target.value };
+                                setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                              }}
+                              className="p-2 py-1.5 rounded-xl text-xs font-bold border bg-slate-950 border-slate-805 text-slate-300 focus:outline-none min-w-[200px] cursor-pointer"
+                            >
+                              <option value="">-- Chọn ghép nối --</option>
+                              {allRightTexts.map((txt) => (
+                                <option key={txt} value={txt}>{txt}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Fill In The Blank") {
+              const currentInputVal = testAnswers[currentQuestionIndex] === undefined ? "" : testAnswers[currentQuestionIndex];
+              return (
+                <div className="space-y-4 font-sans text-left" id="testing-blank-block">
+                  <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
+                    ✍️ <strong>Soạn thảo ô khuyết:</strong> Nhập câu trả lời tối ưu của bạn trực tiếp vào hộp nhập văn bản dưới đây.
+                  </div>
+
+                  <div className="bg-slate-900/30 border border-slate-800 p-5 rounded-2xl">
+                    <input
+                      type="text"
+                      value={currentInputVal}
+                      onChange={(e) => {
+                        setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: e.target.value }));
+                      }}
+                      placeholder="Nhập câu trả lời chính xác của bạn tại đây..."
+                      className="w-full p-3.5 border border-slate-800 bg-slate-950 text-slate-200 font-semibold rounded-xl text-xs md:text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              );
+            }
+
+            if (q.questionType === "Drag And Drop") {
+              return (
+                <div className="space-y-5 font-sans text-left" id="testing-dragdrop-block">
+                  <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
+                    🎯 <strong>Ghép nhãn đa chiều (Drag & Drop):</strong> Click/chọn một nhãn từ khay rồi click vào Hộp thả trống tương ứng thích hợp.
+                  </div>
+
+                  {/* Drag items container */}
+                  <div className="p-4 bg-slate-900/40 border border-slate-800 rounded-2xl flex flex-col gap-2">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block tracking-wide font-mono">Danh mục thẻ sẵn có:</span>
+                    <div className="flex flex-wrap gap-2.5 items-center mt-1">
+                      {(q.dragItems || []).map((itm: string) => {
+                        const assignedTargets = Object.values((testAnswers[currentQuestionIndex] as Record<number, string>) || {});
+                        const isAssigned = assignedTargets.includes(itm);
+                        const isSelected = activeDragItem === itm;
+
+                        return (
+                          <button
+                            key={itm}
+                            disabled={isAssigned}
+                            onClick={() => {
+                              setActiveDragItem(activeDragItem === itm ? null : itm);
+                            }}
+                            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition duration-150 ${
+                              isSelected
+                                ? "bg-indigo-600 border-indigo-500 text-white shadow-md scale-105"
+                                : isAssigned
+                                ? "opacity-20 bg-slate-950 border-slate-900 text-slate-650 cursor-not-allowed"
+                                : "bg-slate-950 border-slate-850 text-slate-300 hover:bg-slate-800"
+                            }`}
+                          >
+                            {itm}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Target slots drop zones code */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {(q.dragTargets || []).map((target: any, index: number) => {
+                      const dragMatches = (testAnswers[currentQuestionIndex] as Record<number, string>) || {};
+                      const placedVal = dragMatches[index];
+
+                      return (
+                        <div
+                          key={index}
+                          className="p-4 rounded-xl border border-slate-800 bg-slate-900/20 flex flex-col justify-between min-h-[120px]"
+                        >
+                          <div>
+                            <span className="text-[10px] font-black text-slate-500 mb-1.5 block uppercase tracking-wide leading-none">{target.placeholder}</span>
+                            
+                            <div className="mb-2">
+                              <select
+                                value={placedVal || ""}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const updated = { ...dragMatches };
+                                  if (!val) {
+                                    delete updated[index];
+                                  } else {
+                                    // Remove prior duplicate assignments
+                                    Object.keys(updated).forEach((k) => {
+                                      if (updated[Number(k)] === val) {
+                                        delete updated[Number(k)];
+                                      }
+                                    });
+                                    updated[index] = val;
+                                  }
+                                  setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                                }}
+                                className="w-full text-xs font-bold text-slate-300 bg-slate-950 border border-slate-800 cursor-pointer p-1.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              >
+                                <option value="" className="text-slate-500">-- Click chọn nhanh thẻ --</option>
+                                {(q.dragItems || []).map((itm: string) => (
+                                  <option key={itm} value={itm} className="bg-slate-950 text-slate-300">{itm}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="relative mt-1">
+                            {placedVal ? (
+                              <div className="flex items-center justify-between p-2.5 rounded-lg bg-indigo-950/60 border border-indigo-900 font-bold text-xs text-indigo-200">
+                                <span className="font-semibold">{placedVal}</span>
+                                <button
+                                  onClick={() => {
+                                    const updated = { ...dragMatches };
+                                    delete updated[index];
+                                    setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                                  }}
+                                  className="text-slate-400 hover:text-red-400 p-0.5 rounded cursor-pointer"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  if (!activeDragItem) return;
+                                  const updated = { ...dragMatches };
+                                  // Remove any duplicate target values
+                                  Object.keys(updated).forEach((k) => {
+                                    if (updated[Number(k)] === activeDragItem) {
+                                      delete updated[Number(k)];
+                                    }
+                                  });
+                                  updated[index] = activeDragItem;
+                                  setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
+                                  setActiveDragItem(null);
+                                }}
+                                className={`w-full py-2 border border-dashed rounded-lg flex items-center justify-center text-xs font-semibold cursor-pointer ${
+                                  activeDragItem
+                                    ? "border-indigo-500 bg-indigo-950/40 text-indigo-300 font-bold animate-pulse"
+                                    : "border-slate-800 bg-slate-950 text-slate-500 hover:bg-slate-900"
+                                }`}
+                              >
+                                {activeDragItem ? "Đặt nhãn đang chọn vào đây" : "[ Đặt bằng nút thẻ ở trên ]"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
 
             if (q.questionType === "Hotspot") {
               const userClicks = Array.isArray(testAnswers[currentQuestionIndex]) ? (testAnswers[currentQuestionIndex] as any[]) : [];
@@ -1373,6 +2335,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                       className="relative overflow-hidden select-none cursor-crosshair w-full"
                       style={{ aspectRatio: "800/400" }}
                     >
+                      {/* Interactive Image */}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={bgImg}
@@ -1407,27 +2370,60 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               return (
                 <div className="space-y-4 text-left font-sans" id="testing-ordering-block">
                   <div className="bg-indigo-950/40 border border-indigo-900 p-3 rounded-xl text-xs text-indigo-200">
-                    🔢 <strong>Quy trình sắp xếp:</strong> Hãy thực hiện bấm chọn các phím mũi tên kéo/hoán đổi để xếp các bước dưới đây theo đúng trình tự nghiệp vụ chuẩn.
+                    🔢 <strong>Quy trình sắp xếp:</strong> Hãy kéo thả các bước hoặc dùng nút mũi tên để xếp đúng vị trí.
                   </div>
 
                   <div className="grid grid-cols-1 gap-2.5 text-left">
                     {currentList.map((item: string, idx: number) => {
+                      const isDragOver = dragOverIdx === idx;
+                      const dynamicDragStyle = isDragOver
+                        ? "border-dashed border-indigo-500 bg-indigo-950/70 scale-[1.015] shadow-md ring-2 ring-indigo-500/30" 
+                        : "bg-slate-900/60 border-slate-800 hover:border-slate-700";
+
                       return (
                         <div
                           key={idx}
-                          className="flex items-center justify-between gap-4 p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-slate-300"
+                          draggable={true}
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData("text/plain", idx.toString());
+                            e.dataTransfer.effectAllowed = "move";
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            setDragOverIdx(idx);
+                          }}
+                          onDragLeave={() => {
+                            setDragOverIdx(null);
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setDragOverIdx(null);
+                            const dragIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+                            if (isNaN(dragIdx) || dragIdx === idx) return;
+                            const updated = [...currentList];
+                            const itemToMove = updated[dragIdx];
+                            updated.splice(dragIdx, 1);
+                            updated.splice(idx, 0, itemToMove);
+                            setTestAnswers(prev => ({
+                              ...prev,
+                              [currentQuestionIndex]: updated
+                            }));
+                          }}
+                          className={`flex items-center justify-between gap-4 p-3 border rounded-xl text-slate-300 transition-all duration-150 cursor-grab active:cursor-grabbing ${dynamicDragStyle}`}
                         >
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 flex-1">
+                            <GripVertical className="w-4 h-4 text-slate-500 shrink-0" />
                             <span className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950 border border-indigo-800 text-indigo-400 shrink-0">
                               {idx + 1}
                             </span>
-                            <span className="text-xs sm:text-sm font-semibold">{item}</span>
+                            <span className="text-xs sm:text-sm font-semibold select-none">{item}</span>
                           </div>
 
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 shrink-0">
                             <button
                               disabled={idx === 0}
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 const updated = [...currentList];
                                 const temp = updated[idx];
                                 updated[idx] = updated[idx - 1];
@@ -1443,7 +2439,8 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                             </button>
                             <button
                               disabled={idx === currentList.length - 1}
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 const updated = [...currentList];
                                 const temp = updated[idx];
                                 updated[idx] = updated[idx + 1];
@@ -1629,13 +2626,60 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
 
             <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
               {sessionQuestions.map((q, qIdx) => {
+                const qRaw = q.originalQuestion;
                 const userAns = testAnswers[qIdx];
-                const isUserCorrect = userAns === q.correctIndexInShuffled;
+                const isUserCorrect = checkAnswerCorrectness(qRaw, q.correctIndexInShuffled, userAns);
+
+                let userAnsText = "Bỏ trống";
+                let correctAnsText = "";
+
+                if (qRaw.questionType === "Multiple Choice" || qRaw.questionType === "Video Based" || !qRaw.questionType) {
+                  userAnsText = userAns !== undefined && q.shuffledOptions[userAns] !== undefined ? String.fromCharCode(65 + userAns) + ". " + q.shuffledOptions[userAns] : "Bỏ trống";
+                  correctAnsText = String.fromCharCode(65 + q.correctIndexInShuffled) + ". " + q.shuffledOptions[q.correctIndexInShuffled];
+                } else if (qRaw.questionType === "Multiple Select") {
+                  const arr = Array.isArray(userAns) ? userAns : [];
+                  userAnsText = arr.length > 0 ? arr.map(idx => String.fromCharCode(65 + idx) + ". " + (qRaw[`option${String.fromCharCode(65 + idx)}`] || q.shuffledOptions?.[idx] || "")).join(" | ") : "Bỏ trống";
+                  const correctArr = qRaw.correctIndicesMulti || [];
+                  correctAnsText = correctArr.map(idx => String.fromCharCode(65 + idx) + ". " + (qRaw[`option${String.fromCharCode(65 + idx)}`] || q.shuffledOptions?.[idx] || "")).join(" | ");
+                } else if (qRaw.questionType === "True / False Single") {
+                  userAnsText = userAns || "Bỏ trống";
+                  correctAnsText = qRaw.correctAnswerBool ? "Đúng" : "Sai";
+                } else if (qRaw.questionType === "True / False Multiple") {
+                  const userTF = userAns || {};
+                  const userPairs = (qRaw.statements || []).map((s, idx) => `${idx + 1}: ${userTF[idx] !== undefined ? (userTF[idx] ? "Đúng" : "Sai") : "[Trống]"}`);
+                  userAnsText = userPairs.join(" | ");
+                  const correctPairs = (qRaw.statements || []).map((s, idx) => `${idx + 1}: ${s.answer ? "Đúng" : "Sai"}`);
+                  correctAnsText = correctPairs.join(" | ");
+                } else if (qRaw.questionType === "Matching") {
+                  const userMatch = userAns || {};
+                  const userPairs = (qRaw.matchingPairs || []).map(p => `[${p.left} -> ${userMatch[p.left] || "[Trống]"}]`);
+                  userAnsText = userPairs.join(" | ");
+                  const correctPairs = (qRaw.matchingPairs || []).map(p => `[${p.left} -> ${p.right}]`);
+                  correctAnsText = correctPairs.join(" | ");
+                } else if (qRaw.questionType === "Fill In The Blank") {
+                  userAnsText = userAns || "Bỏ trống";
+                  correctAnsText = (qRaw.correctAnswersBlank || []).join(" hoặc ");
+                } else if (qRaw.questionType === "Drag And Drop") {
+                  const userDrag = userAns || {};
+                  const userPairs = (qRaw.dragTargets || []).map((t, idx) => `[${t.placeholder} -> ${userDrag[idx] || "[Trống]"}]`);
+                  userAnsText = userPairs.join(" | ");
+                  const correctPairs = (qRaw.dragTargets || []).map((t, idx) => `[${t.placeholder} -> ${t.expectedItem}]`);
+                  correctAnsText = correctPairs.join(" | ");
+                } else if (qRaw.questionType === "Hotspot") {
+                  const clicks = Array.isArray(userAns) ? userAns : [];
+                  userAnsText = clicks.length > 0 ? clicks.map((c, i) => `Tọa độ ${i + 1}(x:${Math.round(c.x)}%, y:${Math.round(c.y)}%)`).join(" | ") : "Chưa nhấp chọn";
+                  correctAnsText = `Đã bấm đúng tất cả ${(qRaw.hotspots || []).length} vùng đáp án.`;
+                } else if (qRaw.questionType === "Ordering / Sequence" || qRaw.questionType === "Ordering") {
+                  const arr = Array.isArray(userAns) ? userAns : [];
+                  userAnsText = arr.length > 0 ? arr.map((val, i) => `${i + 1}. ${val}`).join(" -> ") : "Bỏ trống";
+                  const correctArr = qRaw.options || qRaw.correctSequence || [];
+                  correctAnsText = correctArr.map((val, i) => `${i + 1}. ${val}`).join(" -> ");
+                }
 
                 return (
-                  <div key={q.originalQuestion.id} className="p-3.5 rounded-xl border border-slate-150 bg-white shadow-sm space-y-2">
+                  <div key={qRaw.id} className="p-3.5 rounded-xl border border-slate-150 bg-white shadow-sm space-y-2">
                     <div className="flex justify-between items-center text-[10px] font-mono text-slate-400 font-bold border-b border-slate-50 pb-1">
-                      <span>CÂU HỎI {qIdx + 1}</span>
+                      <span>CÂU HỎI {qIdx + 1} • LOẠI: {qRaw.questionType || "Multiple Choice"}</span>
                       <span className={isUserCorrect ? "text-emerald-700 bg-emerald-50 px-2 py-0.2 rounded font-extrabold" : "text-rose-700 bg-rose-50 px-2 py-0.2 rounded font-extrabold"}>
                         {isUserCorrect ? "CHÍNH XÁC" : "LỖI SAI"}
                       </span>
@@ -1644,9 +2688,9 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                     <p className="text-xs font-bold text-slate-800 leading-snug">{q.questionText}</p>
                     
                     <div className="text-[11px] text-slate-500 font-semibold space-y-1">
-                      <p>Đáp án bạn chọn: <strong className={isUserCorrect ? "text-emerald-700" : "text-rose-650"}>{userAns !== undefined ? String.fromCharCode(65 + userAns) + ". " + q.shuffledOptions[userAns] : "Bỏ trống"}</strong></p>
+                      <p>Đáp án bạn chọn: <strong className={isUserCorrect ? "text-emerald-700" : "text-rose-650"}>{userAnsText}</strong></p>
                       {!isUserCorrect && (
-                        <p>Đáp án đúng khuyến nghị: <strong className="text-emerald-700">{String.fromCharCode(65 + q.correctIndexInShuffled)}. {q.shuffledOptions[q.correctIndexInShuffled]}</strong></p>
+                        <p>Đáp án đúng khuyến nghị: <strong className="text-emerald-700">{correctAnsText}</strong></p>
                       )}
                     </div>
 

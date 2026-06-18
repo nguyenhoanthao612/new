@@ -18,9 +18,17 @@ export interface IC3Question {
   createdAt?: number;
   updatedAt?: number;
   imageUrl?: string;
-  hotspots?: Array<{ x: number; y: number; radius: number }>;
+  hotspots?: Array<{ x: number; y: number; radius: number; [key: string]: any }>;
   correctSequence?: string[];
   testSetId?: string; // Links this question to a specific test set
+  correctIndicesMulti?: number[];
+  correctAnswerBool?: boolean;
+  statements?: Array<{ statement: string; answer: boolean }>;
+  matchingPairs?: Array<{ left: string; right: string }>;
+  correctAnswersBlank?: string[];
+  dragItems?: string[];
+  dragTargets?: Array<{ placeholder: string; expectedItem: string }>;
+  videoUrl?: string;
 }
 
 export interface TestSet {

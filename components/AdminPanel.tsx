@@ -24,6 +24,8 @@ import {
   PlusCircle,
   HelpCircle,
   CheckCircle,
+  CheckCircle2,
+  XCircle,
   MessageSquare,
   AlertTriangle,
   MapPin,
@@ -87,6 +89,7 @@ export default function AdminPanel() {
   const [formOptB, setFormOptB] = useState("");
   const [formOptC, setFormOptC] = useState("");
   const [formOptD, setFormOptD] = useState("");
+  const [formOptionsList, setFormOptionsList] = useState<string[]>(["", "", "", ""]);
   const [formCorrectIndex, setFormCorrectIndex] = useState<number>(0);
   const [formCorrectAnswer, setFormCorrectAnswer] = useState<string>("A");
   const [formExplanation, setFormExplanation] = useState("");
@@ -95,6 +98,17 @@ export default function AdminPanel() {
   const [formImageUrl, setFormImageUrl] = useState("");
   const [formHotspots, setFormHotspots] = useState<Array<{ x: number; y: number; radius: number }>>([]);
   const [adminHotspotRadius, setAdminHotspotRadius] = useState<number>(3);
+  
+  // Dynamic Custom Question Type states
+  const [formCorrectIndicesMulti, setFormCorrectIndicesMulti] = useState<number[]>([]);
+  const [formCorrectAnswerBool, setFormCorrectAnswerBool] = useState<boolean>(true);
+  const [formStatements, setFormStatements] = useState<Array<{ statement: string; answer: boolean }>>([{ statement: "", answer: true }]);
+  const [formMatchingPairs, setFormMatchingPairs] = useState<Array<{ left: string; right: string }>>([{ left: "", right: "" }]);
+  const [formCorrectAnswersBlank, setFormCorrectAnswersBlank] = useState<string>("");
+  const [formDragItems, setFormDragItems] = useState<string>("");
+  const [formDragTargets, setFormDragTargets] = useState<Array<{ placeholder: string; expectedItem: string }>>([{ placeholder: "", expectedItem: "" }]);
+  const [formVideoUrl, setFormVideoUrl] = useState<string>("");
+
   const [successPopup, setSuccessPopup] = useState<{ isOpen: boolean; message: string; subMessage?: string } | null>(null);
 
   const handleAdminImgClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -529,6 +543,234 @@ export default function AdminPanel() {
       setDeletingDocId(null);
     }
   };
+ 
+  const parsePastedBlock = (text: string) => {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return null;
+
+    let questionLines: string[] = [];
+    const optionsList: { text: string; isCorrect: boolean; rawPrefix: string }[] = [];
+    let detectedExplanation = "";
+    const detectedCorrectIndices: number[] = [];
+
+    let isParsingOptions = false;
+    const optionPrefixRegex = /^([-a-eA-Eg1-4]|đúng|sai)\s*[\.\)\-:\s]\s*(.*)$/i;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      const expMatch = line.match(/^(?:giải thích|lời giải|gợi ý|explanation|giai thich|loi gia|note)[:\-=\s]\s*(.*)$/i);
+      if (expMatch) {
+        detectedExplanation = expMatch[1].trim();
+        continue;
+      }
+
+      const ansMatch = line.match(/^(?:đáp án|đáp án đúng|correct answer|answer|key|ans|dap an)[:\-=\s]\s*([a-dgA-DG1-4\s,;+&|/]+)$/i);
+      if (ansMatch) {
+         const letters = ansMatch[1].toUpperCase().replace(/[^A-D1-4]/g, "").split("");
+         letters.forEach(char => {
+           let idx = -1;
+           if (["A", "1"].includes(char)) idx = 0;
+           else if (["B", "2"].includes(char)) idx = 1;
+           else if (["C", "3"].includes(char)) idx = 2;
+           else if (["D", "4"].includes(char)) idx = 3;
+           if (idx !== -1 && !detectedCorrectIndices.includes(idx)) {
+             detectedCorrectIndices.push(idx);
+           }
+         });
+         continue;
+      }
+
+      const isOptionPattern = i > 0 && optionPrefixRegex.test(line);
+      if (isOptionPattern) {
+        isParsingOptions = true;
+      }
+
+      if (!isParsingOptions) {
+        questionLines.push(line);
+      } else {
+        const prefixMatch = line.match(/^([-a-eA-Eg1-4]|đúng|sai)\s*[\.\)\-:\s]\s*(.*)$/i);
+        let rawPrefix = "";
+        let cleanText = line;
+        if (prefixMatch) {
+          rawPrefix = prefixMatch[1];
+          cleanText = prefixMatch[2].trim();
+        }
+
+        let isCorrect = false;
+        const correctPatterns = [
+          /\(Correct\)/i,
+          /\[Correct\]/i,
+          /\(Đúng\)/i,
+          /\[Đúng\]/i,
+          /\(Dung\)/i,
+          /\[Dung\]/i,
+          /\*$/
+        ];
+        for (const pattern of correctPatterns) {
+          if (pattern.test(cleanText)) {
+            isCorrect = true;
+            cleanText = cleanText.replace(pattern, "").trim();
+          }
+        }
+
+        optionsList.push({
+          text: cleanText,
+          isCorrect,
+          rawPrefix
+        });
+      }
+    }
+
+    let questionText = questionLines.join("\n").trim();
+    
+    return {
+      questionText,
+      options: optionsList,
+      explanation: detectedExplanation,
+      correctIndices: detectedCorrectIndices
+    };
+  };
+
+  const handlePasteInQuestionText = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = e.clipboardData.getData("text");
+    if (!pastedText) return;
+    
+    const parsed = parsePastedBlock(pastedText);
+    if (!parsed) return;
+
+    if (parsed.options.length === 0) {
+      const singleTfMatch = parsed.questionText.match(/^(.*?)\s*[\(\[]?(Đúng|Sai|True|False)[\)\]]?$/i);
+      if (singleTfMatch) {
+         e.preventDefault();
+         const cleanQ = singleTfMatch[1].trim();
+         const ansText = singleTfMatch[2].toLowerCase();
+         const isTrue = ansText === "đúng" || ansText === "true";
+         setFormText(cleanQ);
+         setFormQuestionType("True / False Single");
+         setFormCorrectAnswerBool(isTrue);
+         showNotice("success", `⚡ Đã nhận diện Đúng/Sai đơn, đáp án: ${isTrue ? "Đúng" : "Sai"}`);
+         return;
+      }
+      return;
+    }
+
+    e.preventDefault();
+    setFormText(parsed.questionText);
+    
+    if (parsed.explanation) {
+      setFormExplanation(parsed.explanation);
+    }
+
+    const isTrueFalseMultiple = parsed.options.length > 1 && parsed.options.every(opt => {
+      const t = opt.text.toLowerCase();
+      const hasSaiMark = t.includes("sai") || t.includes("false") || t.includes("không");
+      const hasDungMark = t.includes("đúng") || t.includes("true");
+      return hasSaiMark || hasDungMark;
+    });
+
+    const isTrueFalseSingle = parsed.options.length === 2 && 
+      (parsed.options[0].text.toLowerCase() === "đúng" || parsed.options[0].text.toLowerCase() === "true" ||
+       parsed.options[0].text.toLowerCase() === "sai" || parsed.options[0].text.toLowerCase() === "false");
+
+    if (isTrueFalseMultiple) {
+      setFormQuestionType("True / False Multiple");
+      
+      const statements = parsed.options.map(opt => {
+         let textPart = opt.text;
+         let isCorrectValue = true;
+         
+         const saiPatterns = [
+           /\(Sai\)/i, /\[Sai\]/i, /\(False\)/i, /\[False\]/i, /\(Không\)/i, /\[Không\]/i
+         ];
+         const dungPatterns = [
+           /\(Đúng\)/i, /\[Đúng\]/i, /\(True\)/i, /\[True\]/i
+         ];
+         
+         let foundSai = false;
+         let foundDung = false;
+         
+         for (const p of saiPatterns) {
+           if (p.test(textPart)) {
+             foundSai = true;
+             textPart = textPart.replace(p, "").trim();
+           }
+         }
+         for (const p of dungPatterns) {
+           if (p.test(textPart)) {
+             foundDung = true;
+             textPart = textPart.replace(p, "").trim();
+           }
+         }
+         
+         if (foundSai) {
+           isCorrectValue = false;
+         } else if (foundDung) {
+           isCorrectValue = true;
+         } else {
+           isCorrectValue = opt.isCorrect;
+         }
+         
+         return {
+           statement: textPart,
+           answer: isCorrectValue
+         };
+      });
+      
+      setFormStatements(statements);
+      showNotice("success", `⚡ Đã tự động nhận diện câu hỏi True/False nhiều phát biểu (${statements.length} câu con)!`);
+    } else if (isTrueFalseSingle) {
+      setFormQuestionType("True / False Single");
+      let dungIndex = parsed.options.findIndex(o => o.text.toLowerCase() === "đúng" || o.text.toLowerCase() === "true");
+      if (dungIndex === -1) dungIndex = 0;
+      
+      let isCorrectBool = true;
+      if (parsed.correctIndices.length > 0) {
+        isCorrectBool = parsed.correctIndices[0] === dungIndex;
+      } else {
+        const correctIndex = parsed.options.findIndex(o => o.isCorrect);
+        if (correctIndex !== -1) {
+          isCorrectBool = correctIndex === dungIndex;
+        }
+      }
+      setFormCorrectAnswerBool(isCorrectBool);
+      showNotice("success", `⚡ Đã nhận diện câu hỏi Đúng/Sai (Đơn) với đáp án: ${isCorrectBool ? 'Đúng' : 'Sai'}!`);
+    } else {
+      const optA = parsed.options[0]?.text || "";
+      const optB = parsed.options[1]?.text || "";
+      const optC = parsed.options[2]?.text || "";
+      const optD = parsed.options[3]?.text || "";
+      
+      setFormOptA(optA);
+      setFormOptB(optB);
+      setFormOptC(optC);
+      setFormOptD(optD);
+      
+      const paddedList = [optA, optB, optC, optD];
+      setFormOptionsList(paddedList);
+      
+      const correctIndicesMarked = parsed.options
+        .map((o, idx) => o.isCorrect ? idx : -1)
+        .filter(idx => idx !== -1);
+        
+      const mergedCorrectIndices = Array.from(new Set([...correctIndicesMarked, ...parsed.correctIndices]));
+      
+      if (mergedCorrectIndices.length > 1) {
+        setFormQuestionType("Multiple Select");
+        setFormCorrectIndicesMulti(mergedCorrectIndices);
+        showNotice("success", `⚡ Nhận diện câu hỏi Nhiều lựa chọn (Multiple Select) với các đáp án: ${mergedCorrectIndices.map(i => String.fromCharCode(65 + i)).join(", ")}!`);
+      } else {
+        setFormQuestionType("Multiple Choice");
+        let finalCorrectIdx = 0;
+        if (mergedCorrectIndices.length === 1) {
+          finalCorrectIdx = mergedCorrectIndices[0];
+        }
+        setFormCorrectIndex(finalCorrectIdx);
+        setFormCorrectAnswer(String.fromCharCode(65 + finalCorrectIdx));
+        showNotice("success", `⚡ Nhận diện câu hỏi Trắc nghiệm (Multiple Choice) với đáp án ĐÚNG: ${String.fromCharCode(65 + finalCorrectIdx)}!`);
+      }
+    }
+  };
 
   const handleSmartPasteChange = (val: string) => {
     setSmartPasteText(val);
@@ -606,6 +848,12 @@ export default function AdminPanel() {
       if (parsedOptions.length <= 1) setFormOptB("");
     }
 
+    const paddedList = [...parsedOptions];
+    while (paddedList.length < 4) {
+      paddedList.push("");
+    }
+    setFormOptionsList(paddedList);
+
     let feedbackMsg = `🎯 Đã phân tích tự động ${parsedOptions.length} phương án.`;
     if (foundCorrectIndex !== null && foundCorrectIndex >= 0 && foundCorrectIndex < 4) {
       setFormCorrectIndex(foundCorrectIndex);
@@ -628,12 +876,12 @@ export default function AdminPanel() {
 
     setIsSubmittingQuestion(true);
     let finalOpts: string[] = [];
-    if (formQuestionType === "True / False") {
+    if (formQuestionType === "True / False Single") {
       finalOpts = ["Đúng", "Sai"];
-    } else if (formQuestionType === "Hotspot") {
-      finalOpts = [];
+    } else if (["Multiple Choice", "Multiple Select", "Ordering / Sequence", "Video Based"].includes(formQuestionType)) {
+      finalOpts = formOptionsList.map(o => o.trim()).filter(Boolean);
     } else {
-      finalOpts = [formOptA.trim(), formOptB.trim(), formOptC.trim(), formOptD.trim()].filter(Boolean);
+      finalOpts = [];
     }
 
     // Automatically derive level and topic based on selected module
@@ -644,6 +892,27 @@ export default function AdminPanel() {
     const finalTopic = finalLevel + " General";
     const finalDifficulty = editingQuestion?.difficulty || "medium";
 
+    let derivedCorrectAnswer = "";
+    if (formQuestionType === "True / False Single") {
+      derivedCorrectAnswer = formCorrectAnswerBool ? "Đúng" : "Sai";
+    } else if (formQuestionType === "Multiple Select") {
+      derivedCorrectAnswer = formCorrectIndicesMulti.map(i => String.fromCharCode(65 + i)).join(", ");
+    } else if (formQuestionType === "True / False Multiple") {
+      derivedCorrectAnswer = formStatements.map(s => `${s.statement}: ${s.answer ? "Đúng" : "Sai"}`).join("; ");
+    } else if (formQuestionType === "Matching") {
+      derivedCorrectAnswer = formMatchingPairs.map(p => `${p.left} = ${p.right}`).join("; ");
+    } else if (formQuestionType === "Fill In The Blank") {
+      derivedCorrectAnswer = formCorrectAnswersBlank;
+    } else if (formQuestionType === "Drag And Drop") {
+      derivedCorrectAnswer = formDragTargets.map(t => `${t.placeholder} = ${t.expectedItem}`).join("; ");
+    } else if (formQuestionType === "Hotspot") {
+      derivedCorrectAnswer = JSON.stringify(formHotspots);
+    } else if (formQuestionType === "Ordering / Sequence") {
+      derivedCorrectAnswer = finalOpts.join(" -> ");
+    } else {
+      derivedCorrectAnswer = formCorrectAnswer || String.fromCharCode(65 + formCorrectIndex);
+    }
+
     try {
       const payload: any = {
         module: formModule,
@@ -651,17 +920,13 @@ export default function AdminPanel() {
         questionType: formQuestionType,
         topic: finalTopic,
         questionText: formText.trim(),
-        optionA: formOptA.trim(),
-        optionB: formOptB.trim(),
-        optionC: formOptC.trim(),
-        optionD: formOptD.trim(),
+        optionA: finalOpts[0] || "",
+        optionB: finalOpts[1] || "",
+        optionC: finalOpts[2] || "",
+        optionD: finalOpts[3] || "",
         options: finalOpts,
         correctIndex: formCorrectIndex,
-        correctAnswer: formQuestionType === "Hotspot" 
-          ? JSON.stringify(formHotspots) 
-          : formQuestionType === "Ordering / Sequence"
-          ? finalOpts.join(" -> ")
-          : (formCorrectAnswer || String.fromCharCode(65 + formCorrectIndex)),
+        correctAnswer: derivedCorrectAnswer,
         explanation: formExplanation.trim(),
         difficulty: finalDifficulty,
         attachments: formAttachments,
@@ -669,6 +934,14 @@ export default function AdminPanel() {
         hotspots: formHotspots,
         correctSequence: formQuestionType === "Ordering / Sequence" ? finalOpts : [],
         testSetId: formTestSetId || "",
+        correctIndicesMulti: formQuestionType === "Multiple Select" ? formCorrectIndicesMulti : [],
+        correctAnswerBool: formQuestionType === "True / False Single" ? formCorrectAnswerBool : false,
+        statements: formQuestionType === "True / False Multiple" ? formStatements : [],
+        matchingPairs: formQuestionType === "Matching" ? formMatchingPairs : [],
+        correctAnswersBlank: formQuestionType === "Fill In The Blank" ? formCorrectAnswersBlank.split(/[,;]/).map(x => x.trim()).filter(Boolean) : [],
+        dragItems: formQuestionType === "Drag And Drop" ? formDragItems.split(/[,;]/).map(x => x.trim()).filter(Boolean) : [],
+        dragTargets: formQuestionType === "Drag And Drop" ? formDragTargets : [],
+        videoUrl: formQuestionType === "Video Based" ? formVideoUrl.trim() : "",
         updatedAt: Date.now()
       };
 
@@ -716,13 +989,14 @@ export default function AdminPanel() {
         });
       }
 
-      // Reset form states completely
+       // Reset form states completely
       setFormTopic("");
       setFormText("");
       setFormOptA("");
       setFormOptB("");
       setFormOptC("");
       setFormOptD("");
+      setFormOptionsList(["", "", "", ""]);
       setSmartPasteText("");
       setSmartPasteFeedback("");
       setFormCorrectIndex(0);
@@ -732,6 +1006,16 @@ export default function AdminPanel() {
       setFormImageUrl("");
       setFormHotspots([]);
       setFormTestSetId("");
+      
+      // Reset custom inputs
+      setFormCorrectIndicesMulti([]);
+      setFormCorrectAnswerBool(true);
+      setFormStatements([{ statement: "", answer: true }]);
+      setFormMatchingPairs([{ left: "", right: "" }]);
+      setFormCorrectAnswersBlank("");
+      setFormDragItems("");
+      setFormDragTargets([{ placeholder: "", expectedItem: "" }]);
+      setFormVideoUrl("");
     } catch (err: any) {
       console.log("Firestore Save Failed:", err);
       showNotice("error", "Có lỗi xảy ra: " + err.message);
@@ -1699,8 +1983,9 @@ export default function AdminPanel() {
                 >
                   <option value="Multiple Choice">Multiple Choice (1 Đáp án)</option>
                   <option value="Multiple Select">Multiple Select (Nhiều đáp án)</option>
-                  <option value="True / False">True / False (Đúng / Sai)</option>
-                  <option value="Matching">Matching (Nối cột)</option>
+                  <option value="True / False Single">True / False Single (1 Phát biểu)</option>
+                  <option value="True / False Multiple">True / False Multiple (Nhiều phát biểu)</option>
+                  <option value="Matching">Matching (Nối cặp)</option>
                   <option value="Fill In The Blank">Fill In The Blank (Điền khuyết)</option>
                   <option value="Drag And Drop">Drag And Drop (Kéo thả)</option>
                   <option value="Hotspot">Hotspot (Điểm nóng)</option>
@@ -1711,15 +1996,23 @@ export default function AdminPanel() {
 
               {/* Test Set select field */}
               <div className="space-y-1 md:col-span-1">
-                <label className="block text-slate-500">Bài kiểm tra (Test Set)</label>
+                <label className="block text-slate-500">Bài kiểm tra (Thêm vào đâu?)</label>
                 <select
                   value={formTestSetId}
                   onChange={(e) => setFormTestSetId(e.target.value)}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold cursor-pointer text-slate-800"
                 >
-                  <option value="">-- Mặc định (Bổ trợ theo Level) --</option>
-                  {testSets
-                    .filter((ts) => ts.level === formModule)
+                  {formModule === "cf" ? (
+                    <>
+                      <option value="">Bài luyện tập tổng hợp (Mặc định)</option>
+                      <option value="ot1_cf">OT1 (Bài kiểm tra luyện đề)</option>
+                    </>
+                  ) : (
+                    <option value="">-- Mặc định (Bổ trợ theo Level) --</option>
+                  )}
+                  {[...testSets]
+                    .filter((ts) => ts.level === formModule && ts.id !== "default_cf" && ts.id !== "default_ka" && ts.id !== "default_lo" && ts.id !== "ot1_cf")
+                    .sort((a, b) => a.title.localeCompare(b.title, "vi", { numeric: true, sensitivity: "base" }))
                     .map((ts) => (
                       <option key={ts.id} value={ts.id}>
                         {ts.title}
@@ -1730,111 +2023,157 @@ export default function AdminPanel() {
 
               {/* Question text */}
               <div className="col-span-full space-y-1">
-                <label className="block text-slate-500">Nội dung câu hỏi (Question Text)</label>
+                <label className="block text-slate-500 font-semibold text-xs text-indigo-750 flex items-center justify-between">
+                  <span>Nội dung câu hỏi (Question Text)</span>
+                  <span className="text-[10px] text-purple-600 bg-purple-50 px-2 py-0.5 rounded-md font-medium border border-purple-100">
+                    💡 Hỗ trợ dán thẳng block Câu hỏi + Đáp án để tự tách tách
+                  </span>
+                </label>
                 <textarea
-                  rows={2}
-                  placeholder="Nhập nội dung câu hỏi luyện thi..."
+                  rows={3}
+                  placeholder="Nhập nội dung hoặc dán trực tiếp cụm câu hỏi & các phương án A, B, C, D kèm nhãn (Đúng) để tự động điền các ô dưới..."
                   value={formText}
                   onChange={(e) => setFormText(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none"
+                  onPaste={handlePasteInQuestionText}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-indigo-150 focus:outline-none focus:bg-white transition duration-150"
                 />
               </div>
 
               {/* Options list container – only show option inputs if it is not a true/false or hotspot question */}
-              {formQuestionType !== "True / False" && formQuestionType !== "Hotspot" && (
+              {["Multiple Choice", "Multiple Select", "Ordering / Sequence", "Video Based"].includes(formQuestionType) && (
                 <div className="space-y-3 p-4 bg-slate-50/50 border border-slate-100 rounded-2xl col-span-full text-left">
-                  <span className="text-[10px] uppercase text-slate-400 tracking-wider font-extrabold block">
+                  <span className="text-[10px] uppercase text-indigo-650 tracking-wider font-extrabold block">
                     {formQuestionType === "Ordering / Sequence" 
                       ? "Danh sách các mục cần sắp xếp (Hãy nhập theo đúng thứ tự chính xác)" 
-                      : "Bốn phương án trả lời tùy chọn"}
+                      : `Danh sách phương án trả lời tùy chọn (${formOptionsList.length} lựa chọn)`}
                   </span>
-
-                  {/* Smart Paste (Dán nhanh đáp án) */}
-                  <div className="bg-purple-50/45 border border-purple-100 rounded-xl p-3.5 space-y-2">
-                    <div className="flex justify-between items-center">
-                      <label className="text-[11px] font-extrabold uppercase text-purple-700 tracking-wider flex items-center gap-1">
-                        ⚡ Dán nhanh đáp án (Smart Paste)
-                      </label>
-                      {smartPasteText && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSmartPasteText("");
-                            setSmartPasteFeedback("");
-                            setFormOptA("");
-                            setFormOptB("");
-                            setFormOptC("");
-                            setFormOptD("");
-                          }}
-                          className="text-rose-500 hover:text-rose-700 text-[10px] font-extrabold hover:underline"
-                        >
-                          Xóa trắng toàn bộ phương án
-                        </button>
-                      )}
-                    </div>
-                    <textarea
-                      rows={3}
-                      placeholder="Dán block đáp án tại đây. Ví dụ:&#13;a. Duyệt đa trang một lúc&#13;b. Lịch sử hoặc dòng thời gian&#13;c. Mục yêu thích hoặc dấu trang (Correct)&#13;d. Hộp địa chỉ"
-                      value={smartPasteText}
-                      onChange={(e) => handleSmartPasteChange(e.target.value)}
-                      className="w-full p-2.5 bg-white border border-purple-100 rounded-xl text-slate-800 placeholder-slate-400 font-sans text-xs focus:ring-2 focus:ring-purple-200 focus:outline-none"
-                    />
-                    {smartPasteFeedback && (
-                      <div className="text-[10px] text-purple-700 bg-purple-50 border border-purple-100 p-2 rounded-lg font-mono whitespace-pre-wrap leading-relaxed">
-                        {smartPasteFeedback}
-                      </div>
-                    )}
-                  </div>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-slate-500">
-                        {formQuestionType === "Ordering / Sequence" ? "Bước thứ 1 (Đầu tiên)" : "Phương án A"}
-                      </label>
-                      <input
-                        type="text"
-                        placeholder={formQuestionType === "Ordering / Sequence" ? "Ví dụ: Chọn File" : "Nội dung đáp án lựa chọn A"}
-                        value={formOptA}
-                        onChange={(e) => setFormOptA(e.target.value)}
-                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800"
-                      />
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {formOptionsList.map((opt, index) => {
+                        const labelChar = String.fromCharCode(65 + index);
+                        const isSingleCorrect = ["Multiple Choice", "Video Based"].includes(formQuestionType) && formCorrectIndex === index;
+                        const isMultiCorrect = formQuestionType === "Multiple Select" && formCorrectIndicesMulti.includes(index);
+
+                        return (
+                          <div 
+                            key={index} 
+                            className={`space-y-1.5 p-3 rounded-2xl border transition duration-150 ${
+                              isSingleCorrect 
+                                ? "bg-emerald-50/50 border-emerald-300 shadow-sm" 
+                                : isMultiCorrect 
+                                ? "bg-indigo-50/40 border-indigo-300 shadow-sm"
+                                : "bg-white border-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <label className="text-[11px] font-bold text-slate-500 uppercase">
+                                  {formQuestionType === "Ordering / Sequence" 
+                                    ? `Bước thứ ${index + 1}` 
+                                    : `Lựa chọn ${labelChar}`}
+                                </label>
+
+                                {["Multiple Choice", "Video Based"].includes(formQuestionType) && (
+                                  <label className="inline-flex items-center gap-1 cursor-pointer select-none">
+                                    <input
+                                      type="radio"
+                                      name="correctIndexGroup"
+                                      checked={formCorrectIndex === index}
+                                      onChange={() => {
+                                        setFormCorrectIndex(index);
+                                        setFormCorrectAnswer(labelChar);
+                                      }}
+                                      className="w-4 h-4 text-emerald-600 border-slate-300 focus:ring-emerald-400"
+                                    />
+                                    <span className={`text-[10px] font-extrabold uppercase transition ${
+                                      formCorrectIndex === index ? "text-emerald-700 font-black h-fit" : "text-slate-400"
+                                    }`}>
+                                      {formCorrectIndex === index ? "✓ ĐÚNG" : "Đáp án ĐÚNG"}
+                                    </span>
+                                  </label>
+                                )}
+
+                                {formQuestionType === "Multiple Select" && (
+                                  <label className="inline-flex items-center gap-1 cursor-pointer select-none">
+                                    <input
+                                      type="checkbox"
+                                      checked={formCorrectIndicesMulti.includes(index)}
+                                      onChange={() => {
+                                        if (formCorrectIndicesMulti.includes(index)) {
+                                          setFormCorrectIndicesMulti(prev => prev.filter(i => i !== index));
+                                        } else {
+                                          setFormCorrectIndicesMulti(prev => [...prev, index].sort());
+                                        }
+                                      }}
+                                      className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-400"
+                                    />
+                                    <span className={`text-[10px] font-extrabold uppercase transition ${
+                                      formCorrectIndicesMulti.includes(index) ? "text-indigo-700 font-black" : "text-slate-400"
+                                    }`}>
+                                      {formCorrectIndicesMulti.includes(index) ? "✓ CHỌN ĐÚNG" : "Chọn Đúng"}
+                                    </span>
+                                  </label>
+                                )}
+                              </div>
+
+                              {formOptionsList.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = formOptionsList.filter((_, idx) => idx !== index);
+                                    setFormOptionsList(updated);
+                                    if (formCorrectIndex >= updated.length) {
+                                      setFormCorrectIndex(Math.max(0, updated.length - 1));
+                                      setFormCorrectAnswer(String.fromCharCode(65 + Math.max(0, updated.length - 1)));
+                                    }
+                                    setFormCorrectIndicesMulti(prev => prev.filter(i => i < updated.length));
+                                  }}
+                                  className="text-rose-500 hover:text-rose-700 text-[10px] font-semibold flex items-center gap-0.5 opacity-60 hover:opacity-100 transition"
+                                >
+                                  <Trash2 className="w-3 h-3" /> Xóa
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              type="text"
+                              placeholder={
+                                formQuestionType === "Ordering / Sequence" 
+                                  ? `Ví dụ: Thao tác bước ${index + 1}` 
+                                  : `Nội dung của đáp án lựa chọn ${labelChar}`
+                              }
+                              value={opt}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const updated = [...formOptionsList];
+                                updated[index] = val;
+                                setFormOptionsList(updated);
+                                // Sync back to formOptA..D for legacy fallbacks
+                                if (index === 0) setFormOptA(val);
+                                else if (index === 1) setFormOptB(val);
+                                else if (index === 2) setFormOptC(val);
+                                else if (index === 3) setFormOptD(val);
+                              }}
+                              className={`w-full p-2.5 bg-white border rounded-xl text-slate-800 text-xs focus:ring-2 focus:outline-none transition ${
+                                isSingleCorrect 
+                                  ? "border-emerald-300 focus:ring-emerald-300" 
+                                  : isMultiCorrect 
+                                  ? "border-indigo-300 focus:ring-indigo-300"
+                                  : "border-slate-200 focus:ring-indigo-200"
+                              }`}
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-slate-500">
-                        {formQuestionType === "Ordering / Sequence" ? "Bước thứ 2" : "Phương án B"}
-                      </label>
-                      <input
-                        type="text"
-                        placeholder={formQuestionType === "Ordering / Sequence" ? "Ví dụ: Chọn Save As" : "Nội dung đáp án lựa chọn B"}
-                        value={formOptB}
-                        onChange={(e) => setFormOptB(e.target.value)}
-                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-slate-500">
-                        {formQuestionType === "Ordering / Sequence" ? "Bước thứ 3" : "Phương án C"}
-                      </label>
-                      <input
-                        type="text"
-                        placeholder={formQuestionType === "Ordering / Sequence" ? "Ví dụ: Chọn vị trí lưu" : "Nội dung đáp án lựa chọn C"}
-                        value={formOptC}
-                        onChange={(e) => setFormOptC(e.target.value)}
-                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-slate-500">
-                        {formQuestionType === "Ordering / Sequence" ? "Bước thứ 4 (Cuối cùng)" : "Phương án D"}
-                      </label>
-                      <input
-                        type="text"
-                        placeholder={formQuestionType === "Ordering / Sequence" ? "Ví dụ: Nhấn Save" : "Nội dung đáp án lựa chọn D"}
-                        value={formOptD}
-                        onChange={(e) => setFormOptD(e.target.value)}
-                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-slate-800"
-                      />
-                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setFormOptionsList(prev => [...prev, ""])}
+                      className="w-full py-2.5 border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/15 hover:bg-indigo-50/35 text-indigo-700 font-extrabold rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <PlusCircle className="w-4 h-4" /> Thêm phương án khác
+                    </button>
                   </div>
                 </div>
               )}
@@ -1954,50 +2293,325 @@ export default function AdminPanel() {
                 </div>
               )}
 
-              {/* Correct answers input */}
-              {formQuestionType !== "Hotspot" && formQuestionType !== "Ordering / Sequence" && (
-                <div className="space-y-1 col-span-1">
-                  <label className="block text-slate-500">Đáp án chính xác (Ký tự / Chỉ số)</label>
-                  {formQuestionType === "True / False" ? (
-                    <select
-                      value={formCorrectIndex}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        setFormCorrectIndex(val);
-                        setFormCorrectAnswer(val === 0 ? "Đúng" : "Sai");
-                      }}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-extrabold cursor-pointer"
-                    >
-                      <option value={0}>Đúng (True)</option>
-                      <option value={1}>Sai (False)</option>
-                    </select>
-                  ) : (
-                    <div className="flex gap-2 items-center">
-                      <select
-                        value={formCorrectIndex}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          setFormCorrectIndex(val);
-                          setFormCorrectAnswer(String.fromCharCode(65 + val));
-                        }}
-                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-extrabold cursor-pointer"
+              {/* Correct answers input and extra fields */}
+              <div className="col-span-full space-y-4 text-left">
+                {/* 1. Multiple Choice */}
+                {(formQuestionType === "Multiple Choice" || formQuestionType === "Video Based") && (
+                  <div className="grid grid-cols-1 gap-4">
+                    {formQuestionType === "Video Based" && (
+                      <div className="space-y-1">
+                        <label className="block text-slate-500 font-extrabold text-[11px] uppercase text-indigo-700">🎥 Đường dẫn Video YouTube</label>
+                        <input
+                          type="text"
+                          placeholder="Ví dụ: https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                          value={formVideoUrl}
+                          onChange={(e) => setFormVideoUrl(e.target.value)}
+                          className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs"
+                        />
+                      </div>
+                    )}
+                    <div className="bg-emerald-50/45 p-3.5 border border-emerald-100 rounded-2xl flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-full bg-emerald-500 flex items-center justify-center text-white text-xs font-bold leading-none shrink-0 animate-pulse">✓</div>
+                      <div>
+                        <p className="text-xs font-bold text-emerald-850">Lựa chọn đúng: Phương án {formCorrectAnswer || String.fromCharCode(65 + formCorrectIndex)}</p>
+                        <p className="text-[10px] text-emerald-600 font-medium">Bạn đã nhấp đặt đáp án đúng trực tiếp cạnh ô nhập nội dung phương án ở trên.</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Multiple Select */}
+                {formQuestionType === "Multiple Select" && (
+                  <div className="bg-indigo-50/45 p-3.5 border border-indigo-150 rounded-2xl flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-full bg-indigo-650 flex items-center justify-center text-white text-xs font-bold shrink-0">☑</div>
+                    <div>
+                      <p className="text-xs font-bold text-indigo-900">
+                        Đáp án đúng đã thiết lập: {formCorrectIndicesMulti.length > 0 
+                          ? formCorrectIndicesMulti.map(i => String.fromCharCode(65 + i)).join(", ") 
+                          : "Chưa chọn đáp án nào"}
+                      </p>
+                      <p className="text-[10px] text-indigo-550 font-medium">Chọn một hoặc nhiều đáp án chuẩn xác trực tiếp bằng nút tick bên cạnh mỗi hộp nhập ở trên.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. True / False Single */}
+                {formQuestionType === "True / False Single" && (
+                  <div className="space-y-3.5 text-left">
+                    <div className="bg-sky-50 border border-sky-100 p-3 rounded-xl text-xs text-sky-850 flex items-start gap-2 max-w-xl">
+                      <span className="text-sm">💡</span>
+                      <p>
+                        Bạn đang chọn dạng <strong>1 Phát biểu duy nhất</strong>. Nếu muốn tạo câu hỏi chứa <strong>nhiều phát biểu con (thêm nhiều câu)</strong> đòi hỏi tích chọn Đúng/Sai cho từng ý, xin vui lòng chọn Dạng câu tương tác là <strong>True / False Multiple (Nhiều phát biểu)</strong> ở trên!
+                      </p>
+                    </div>
+
+                    <label className="block text-slate-500 font-extrabold text-xs uppercase">Đáp án Đúng hoặc Sai của phát biểu này:</label>
+                    <div className="flex gap-4 max-w-md">
+                      <button
+                        type="button"
+                        onClick={() => setFormCorrectAnswerBool(true)}
+                        className={`flex-1 py-3 px-5 rounded-xl border flex items-center justify-center gap-2 transition cursor-pointer ${
+                          formCorrectAnswerBool 
+                            ? "border-emerald-500 bg-emerald-50/50 text-emerald-900 font-extrabold" 
+                            : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                        }`}
                       >
-                        <option value={0}>Phương án A</option>
-                        <option value={1}>Phương án B</option>
-                        <option value={2}>Phương án C</option>
-                        <option value={3}>Phương án D</option>
-                      </select>
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span className="text-xs uppercase font-bold">ĐÚNG (True)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormCorrectAnswerBool(false)}
+                        className={`flex-1 py-3 px-5 rounded-xl border flex items-center justify-center gap-2 transition cursor-pointer ${
+                          !formCorrectAnswerBool 
+                            ? "border-rose-500 bg-rose-50/50 text-rose-900 font-extrabold" 
+                            : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                        }`}
+                      >
+                        <XCircle className="w-4 h-4 text-rose-600" />
+                        <span className="text-xs uppercase font-bold">SAI (False)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. True / False Multiple */}
+                {formQuestionType === "True / False Multiple" && (
+                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-left space-y-3">
+                    <div className="flex justify-between items-center border-b pb-2">
+                      <span className="font-extrabold text-slate-700 text-xs uppercase">📝 Danh sách phát biểu con và câu trả lời Đúng/Sai tương ứng:</span>
+                      <button
+                        type="button"
+                        onClick={() => setFormStatements(prev => [...prev, { statement: "", answer: true }])}
+                        className="text-xs bg-indigo-650 hover:bg-indigo-700 text-white font-extrabold p-1 px-3 rounded-lg flex items-center gap-1 transition cursor-pointer"
+                      >
+                        <PlusCircle className="w-3.5 h-3.5" /> Thêm phát biểu
+                      </button>
+                    </div>
+                    <div className="space-y-2 max-h-[220px] overflow-y-auto">
+                      {formStatements.length === 0 ? (
+                        <p className="text-slate-400 italic text-center text-xs py-4">Chưa có phát biểu nào được thêm.</p>
+                      ) : (
+                        formStatements.map((item, idx) => (
+                          <div key={idx} className="flex gap-2 items-center bg-white p-2 border border-slate-150 rounded-xl">
+                            <span className="font-black text-slate-500 text-xs w-6 text-center">{idx + 1}</span>
+                            <input
+                              type="text"
+                              placeholder="Nội dung khẳng định/phát biểu..."
+                              value={item.statement}
+                              onChange={(e) => {
+                                const updated = [...formStatements];
+                                updated[idx].statement = e.target.value;
+                                setFormStatements(updated);
+                              }}
+                              className="flex-1 p-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-850 focus:outline-none"
+                            />
+                            
+                            <div className="flex bg-slate-100 p-0.5 rounded-lg shrink-0 border border-slate-250/30">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = [...formStatements];
+                                  updated[idx].answer = true;
+                                  setFormStatements(updated);
+                                }}
+                                className={`px-3 py-1.5 rounded-md text-[10px] font-extrabold uppercase transition cursor-pointer ${
+                                  item.answer 
+                                    ? "bg-emerald-600 text-white shadow-sm" 
+                                    : "text-slate-500 hover:text-slate-700"
+                                }`}
+                              >
+                                Đúng
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = [...formStatements];
+                                  updated[idx].answer = false;
+                                  setFormStatements(updated);
+                                }}
+                                className={`px-3 py-1.5 rounded-md text-[10px] font-extrabold uppercase transition cursor-pointer ${
+                                  !item.answer 
+                                    ? "bg-rose-600 text-white shadow-sm" 
+                                    : "text-slate-500 hover:text-slate-700"
+                                }`}
+                              >
+                                Sai
+                              </button>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => setFormStatements(prev => prev.filter((_, i) => i !== idx))}
+                              className="p-1.5 text-rose-550 hover:bg-rose-50 rounded-lg shrink-0 transition cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. Matching */}
+                {formQuestionType === "Matching" && (
+                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-left space-y-3">
+                    <div className="flex justify-between items-center border-b pb-2">
+                      <span className="font-extrabold text-slate-700 text-xs uppercase">🖇️ Cặp ghép nối phù hợp:</span>
+                      <button
+                        type="button"
+                        onClick={() => setFormMatchingPairs(prev => [...prev, { left: "", right: "" }])}
+                        className="text-xs bg-indigo-650 hover:bg-indigo-700 text-white font-extrabold p-1 px-3 rounded-lg flex items-center gap-1 transition"
+                      >
+                        <PlusCircle className="w-3.5 h-3.5" /> Thêm cặp ghép
+                      </button>
+                    </div>
+                    <div className="space-y-2 max-h-[220px] overflow-y-auto">
+                      {formMatchingPairs.length === 0 ? (
+                        <p className="text-slate-400 italic text-center text-xs py-4">Chưa có cặp ghép nào.</p>
+                      ) : (
+                        formMatchingPairs.map((pair, idx) => (
+                          <div key={idx} className="flex gap-2 items-center bg-white p-2 border border-slate-150 rounded-xl">
+                            <span className="font-black text-slate-500 text-xs w-6 text-center">{idx + 1}</span>
+                            <input
+                              type="text"
+                              placeholder="Vế trái (Ví dụ: Ctrl + C)"
+                              value={pair.left}
+                              onChange={(e) => {
+                                const updated = [...formMatchingPairs];
+                                updated[idx].left = e.target.value;
+                                setFormMatchingPairs(updated);
+                              }}
+                              className="flex-1 p-2 bg-slate-550 border border-slate-200 rounded-xl text-xs text-slate-800"
+                            />
+                            <span className="text-slate-400 text-xs font-bold shrink-0">Nối với →</span>
+                            <input
+                              type="text"
+                              placeholder="Vế phải (Ví dụ: Sao chép)"
+                              value={pair.right}
+                              onChange={(e) => {
+                                const updated = [...formMatchingPairs];
+                                updated[idx].right = e.target.value;
+                                setFormMatchingPairs(updated);
+                              }}
+                              className="flex-1 p-2 bg-slate-550 border border-slate-200 rounded-xl text-xs text-slate-800"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setFormMatchingPairs(prev => prev.filter((_, i) => i !== idx))}
+                              className="p-1.5 text-rose-550 hover:bg-rose-50 rounded-lg shrink-0 transition"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. Fill In The Blank */}
+                {formQuestionType === "Fill In The Blank" && (
+                  <div className="space-y-1 text-left">
+                    <label className="block text-slate-500 font-extrabold text-xs uppercase">Các đáp án Đúng được chấp nhận (cách nhau bởi dấu phẩy):</label>
+                    <input
+                      type="text"
+                      placeholder="Ví dụ: Word, Microsoft Word, MS Word"
+                      value={formCorrectAnswersBlank}
+                      onChange={(e) => setFormCorrectAnswersBlank(e.target.value)}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none placeholder-slate-400 text-xs"
+                    />
+                    <p className="text-[10px] text-slate-400 italic mt-1">* Khi chấm điểm, mọi khoảng trắng thừa và dạng chữ HOA/thường đều được bỏ qua.</p>
+                  </div>
+                )}
+
+                {/* 7. Drag And Drop */}
+                {formQuestionType === "Drag And Drop" && (
+                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-left space-y-3">
+                    <div className="space-y-1">
+                      <label className="block text-slate-500 font-extrabold text-xs uppercase">🎨 Các nhãn kéo (Cách nhau bởi dấu phẩy):</label>
                       <input
                         type="text"
-                        placeholder="Đáp án chữ"
-                        value={formCorrectAnswer}
-                        onChange={(e) => setFormCorrectAnswer(e.target.value)}
-                        className="w-16 p-2.5 text-center bg-slate-50 border border-slate-200 rounded-xl text-emerald-700 font-extrabold uppercase"
+                        placeholder="Ví dụ: Căn trái, Căn phải, Căn giữa"
+                        value={formDragItems}
+                        onChange={(e) => setFormDragItems(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none"
                       />
                     </div>
-                  )}
-                </div>
-              )}
+                    <div className="flex justify-between items-center border-t pt-2 mt-2">
+                      <span className="font-extrabold text-slate-700 text-xs uppercase flex items-center gap-1">📥 Các vùng chứa đáp án cần kéo vào (Drop Targets):</span>
+                      <button
+                        type="button"
+                        onClick={() => setFormDragTargets(prev => [...prev, { placeholder: "", expectedItem: "" }])}
+                        className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold p-1 px-3 rounded-lg flex items-center gap-1"
+                      >
+                        <PlusCircle className="w-3.5 h-3.5" /> Thêm vùng thả
+                      </button>
+                    </div>
+                    <div className="space-y-3.5 max-h-[300px] overflow-y-auto pr-1">
+                      {formDragTargets.length === 0 ? (
+                        <p className="text-slate-400 italic text-center text-xs py-4">Chưa có vùng thả nào.</p>
+                      ) : (
+                        formDragTargets.map((target, idx) => {
+                          const parsedDragItems = formDragItems.split(/[,;]/).map(x => x.trim()).filter(Boolean);
+                          return (
+                            <div key={idx} className="flex flex-col sm:flex-row gap-3 items-start sm:items-center bg-white p-3 border border-slate-150 rounded-2xl shadow-sm">
+                              <span className="font-extrabold text-slate-400 text-xs w-6 text-center pt-1.5 sm:pt-0">{idx + 1}</span>
+                              
+                              <div className="flex-1 w-full space-y-1">
+                                <span className="text-[10px] uppercase text-slate-400 font-bold block mb-0.5">Vị trí/Mô tả vùng thả:</span>
+                                <input
+                                  type="text"
+                                  placeholder="Mô tả/Vị trí (Ví dụ: Cân lề trái văn bản)"
+                                  value={target.placeholder}
+                                  onChange={(e) => {
+                                    const updated = [...formDragTargets];
+                                    updated[idx].placeholder = e.target.value;
+                                    setFormDragTargets(updated);
+                                  }}
+                                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none"
+                                />
+                              </div>
+
+                              <div className="flex-1 w-full space-y-1">
+                                <span className="text-[10px] uppercase text-indigo-500 font-extrabold block mb-0.5">🎯 Chọn nhãn đúng kéo vào:</span>
+                                <select
+                                  value={target.expectedItem}
+                                  onChange={(e) => {
+                                    const updated = [...formDragTargets];
+                                    updated[idx].expectedItem = e.target.value;
+                                    setFormDragTargets(updated);
+                                  }}
+                                  className="w-full p-2 bg-indigo-50/50 border border-indigo-200 rounded-xl text-xs text-indigo-950 font-bold focus:outline-none cursor-pointer"
+                                >
+                                  <option value="">-- Chọn nhãn mong muốn --</option>
+                                  {parsedDragItems.map((itm, keyIdx) => (
+                                    <option key={keyIdx} value={itm}>
+                                      {itm}
+                                    </option>
+                                  ))}
+                                  {!parsedDragItems.includes(target.expectedItem) && target.expectedItem && (
+                                    <option value={target.expectedItem}>{target.expectedItem}</option>
+                                  )}
+                                </select>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => setFormDragTargets(prev => prev.filter((_, i) => i !== idx))}
+                                className="p-2 text-rose-500 hover:bg-rose-50 hover:text-rose-600 rounded-xl shrink-0 transition self-end sm:self-center cursor-pointer mt-2 sm:mt-0"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Interactive attachments builder block */}
               <div className="col-span-full md:col-span-2 space-y-2 border border-slate-100 p-4 rounded-2xl bg-slate-50/20 text-left">
@@ -2156,10 +2770,19 @@ export default function AdminPanel() {
                                 setFormQuestionType(q.questionType || "Multiple Choice");
                                 setFormDifficulty(q.difficulty || "medium");
                                 setFormText(q.questionText || "");
-                                setFormOptA(q.optionA || q.options[0] || "");
-                                setFormOptB(q.optionB || q.options[1] || "");
-                                setFormOptC(q.optionC || q.options[2] || "");
-                                setFormOptD(q.optionD || q.options[3] || "");
+                                setFormOptA(q.optionA || (q.options && q.options[0]) || "");
+                                setFormOptB(q.optionB || (q.options && q.options[1]) || "");
+                                setFormOptC(q.optionC || (q.options && q.options[2]) || "");
+                                setFormOptD(q.optionD || (q.options && q.options[3]) || "");
+                                
+                                const loadedOpts = q.options && q.options.length > 0 
+                                  ? [...q.options] 
+                                  : [q.optionA || "", q.optionB || "", q.optionC || "", q.optionD || ""].filter(Boolean);
+                                while (loadedOpts.length < 4) {
+                                  loadedOpts.push("");
+                                }
+                                setFormOptionsList(loadedOpts);
+
                                 setSmartPasteText("");
                                 setSmartPasteFeedback("");
                                 setFormCorrectIndex(q.correctIndex || 0);
@@ -2167,6 +2790,14 @@ export default function AdminPanel() {
                                 setFormExplanation(q.explanation || "");
                                 setFormAttachments(q.attachments || []);
                                 setFormImageUrl(q.imageUrl || "");
+                                setFormCorrectIndicesMulti((q as any).correctIndicesMulti || []);
+                                setFormCorrectAnswerBool((q as any).correctAnswerBool !== undefined ? (q as any).correctAnswerBool : true);
+                                setFormStatements((q as any).statements || [{ statement: "", answer: true }]);
+                                setFormMatchingPairs((q as any).matchingPairs || [{ left: "", right: "" }]);
+                                setFormCorrectAnswersBlank((q as any).correctAnswersBlank ? (q as any).correctAnswersBlank.join(", ") : "");
+                                setFormDragItems((q as any).dragItems ? (q as any).dragItems.join(", ") : "");
+                                setFormDragTargets((q as any).dragTargets || [{ placeholder: "", expectedItem: "" }]);
+                                setFormVideoUrl((q as any).videoUrl || "");
                                 let pts = q.hotspots || [];
                                 if (pts.length === 0 && (q.questionType || "") === "Hotspot") {
                                   try {
@@ -2429,7 +3060,9 @@ export default function AdminPanel() {
                   </div>
                 ) : (
                   <div className="space-y-3.5">
-                    {testSets.map((ts) => {
+                    {[...testSets]
+                      .sort((a, b) => a.title.localeCompare(b.title, "vi", { numeric: true, sensitivity: "base" }))
+                      .map((ts) => {
                       const tsQuestionsCount = questions.filter(q => q.testSetId === ts.id).length;
                       return (
                         <div key={ts.id} className="p-4 rounded-2xl border border-slate-150/70 bg-slate-50/10 hover:bg-slate-50/50 hover:border-purple-250 transition-all flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between text-left">
@@ -2514,10 +3147,10 @@ export default function AdminPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {testSets.map((ts) => {
+                    {[...testSets]
+                      .sort((a, b) => a.title.localeCompare(b.title, "vi", { numeric: true, sensitivity: "base" }))
+                      .map((ts) => {
                       const tsQuestionsCount = questions.filter(q => q.testSetId === ts.id).length;
-                      
-                      // Filter exams specifically associated with this testSetId
                       const attempts = examRecords.filter(r => r.testSetId === ts.id);
                       const totalAttempts = attempts.length;
                       

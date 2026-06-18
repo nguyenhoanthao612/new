@@ -120,6 +120,14 @@ export const DEFAULT_TEST_SETS: TestSet[] = [
     passingScore: 700,
   },
   {
+    id: "ot1_cf",
+    title: "OT1",
+    description: "Bài ôn luyện phản xạ nhanh OT1 - Máy tính căn bản cường độ cao bám sát cấu trúc đề thi chính thức.",
+    level: "cf",
+    duration: 50,
+    passingScore: 700,
+  },
+  {
     id: "default_ka",
     title: "Vòng Luyện Tập KA - Mặc Định",
     description: "Bộ câu hỏi luyện tập mặc định cho Mô-đun Key Applications.",
@@ -192,7 +200,18 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
           moduleVal = "lo";
         }
 
-        // 2. Generate Options list safely
+        // 2. Normalize and check Question Type
+        let qType = data.questionType || "Multiple Choice";
+        if (qType === "True / False" || qType === "true-false") {
+          const hasMultipleStatements = [data.optionA, data.optionB, data.optionC, data.optionD].filter(Boolean).length > 1;
+          if (hasMultipleStatements) {
+            qType = "True / False Multiple";
+          } else {
+            qType = "True / False Single";
+          }
+        }
+
+        // 3. Generate Options list safely
         let opts = data.options || [];
         if (!opts || opts.length === 0) {
           const optA = data.optionA || "";
@@ -200,12 +219,12 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
           const optC = data.optionC || "";
           const optD = data.optionD || "";
           opts = [optA, optB, optC, optD].filter((v) => v !== "");
-          if (opts.length === 0 && (data.questionType === "True / False" || data.questionType === "true-false")) {
+          if (opts.length === 0 && (qType === "True / False Single" || qType === "True / False Multiple")) {
             opts = ["Đúng", "Sai"];
           }
         }
 
-        // 3. Resolve Correct Index securely
+        // 4. Resolve Correct Index securely
         let correctIdx = data.correctIndex;
         if (correctIdx === undefined || correctIdx === null || typeof correctIdx !== "number") {
           const ans = (data.correctAnswer || "").toString().trim().toUpperCase();
@@ -216,6 +235,39 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
           else if (ans.includes("ĐÚNG") || ans === "TRUE") correctIdx = 0;
           else if (ans.includes("SAI") || ans === "FALSE") correctIdx = 1;
           else correctIdx = 0; // standard fallback
+        }
+
+        // 5. Smart Dynamic Fallback for statements if missing in True / False Multiple
+        let statements = data.statements || [];
+        if (qType === "True / False Multiple" && (!statements || statements.length === 0)) {
+          const opsArray = [data.optionA, data.optionB, data.optionC, data.optionD].filter(Boolean);
+          if (opsArray.length > 0) {
+            const rawAnsString = (data.correctAnswer || "").toString().toUpperCase();
+            const ansParts = rawAnsString.split(/[,;\n|]/).map(p => p.trim()).filter(Boolean);
+            
+            statements = opsArray.map((op, idx) => {
+              let matchAnswer = true; // default is True
+              if (ansParts.length > idx) {
+                const part = ansParts[idx];
+                if (part.includes("SAI") || part.includes("FALSE") || part.includes("KHÔNG") || part === "F" || part === "S") {
+                  matchAnswer = false;
+                }
+              } else {
+                const cleanOpLabel = String.fromCharCode(65 + idx);
+                const searchLabel = `OPTION${cleanOpLabel}`;
+                const hasLabelWithSai = rawAnsString.includes(`${cleanOpLabel}: SAI`) || 
+                                       rawAnsString.includes(`${cleanOpLabel}=SAI`) || 
+                                       rawAnsString.includes(`${cleanOpLabel} SAI`) ||
+                                       rawAnsString.includes(`${searchLabel}: SAI`) ||
+                                       rawAnsString.includes(`${cleanOpLabel}: FALSE`) ||
+                                       rawAnsString.includes(`${cleanOpLabel}=FALSE`);
+                if (hasLabelWithSai) {
+                  matchAnswer = false;
+                }
+              }
+              return { statement: op, answer: matchAnswer };
+            });
+          }
         }
 
         const originalTestSetId = data.testSetId || "";
@@ -230,7 +282,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
           correctIndex: correctIdx,
           explanation: data.explanation || "Giải thích đang được cập nhật.",
           level: data.level || (moduleVal === "cf" ? "CF (LV1)" : moduleVal === "ka" ? "KA (LV2)" : "LO (LV3)"),
-          questionType: data.questionType || "Multiple Choice",
+          questionType: qType,
           optionA: data.optionA || "",
           optionB: data.optionB || "",
           optionC: data.optionC || "",
@@ -243,6 +295,14 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
           imageUrl: data.imageUrl || "",
           hotspots: data.hotspots || [],
           correctSequence: data.correctSequence || [],
+          statements: statements,
+          matchingPairs: data.matchingPairs || [],
+          dragItems: data.dragItems || [],
+          dragTargets: data.dragTargets || [],
+          correctIndicesMulti: data.correctIndicesMulti || [],
+          correctAnswerBool: data.correctAnswerBool !== undefined ? data.correctAnswerBool : true,
+          correctAnswersBlank: data.correctAnswersBlank || [],
+          videoUrl: data.videoUrl || "",
           testSetId: finalTestSetId,
         } as IC3Question);
       });
