@@ -82,8 +82,9 @@ export default function Leaderboard({ onBackToHome }: { onBackToHome: () => void
     if (selectedModule !== "all" && rec.module !== selectedModule) return false;
     if (searchTerm) {
       const nameMatch = rec.studentName.toLowerCase().includes(searchTerm.toLowerCase());
+      const classMatch = rec.studentClass ? rec.studentClass.toLowerCase().includes(searchTerm.toLowerCase()) : false;
       const modMatch = rec.module.toLowerCase().includes(searchTerm.toLowerCase());
-      return nameMatch || modMatch;
+      return nameMatch || classMatch || modMatch;
     }
     return true;
   });
@@ -229,11 +230,18 @@ export default function Leaderboard({ onBackToHome }: { onBackToHome: () => void
                         </div>
                       </td>
                       <td className="p-4">
-                        <div className="flex items-center gap-2.5">
+                        <div className="flex items-center gap-2.5 font-sans">
                           <div>
-                            <span className="font-bold text-slate-800 block text-xs group-hover:text-indigo-600 transition">
-                              {rec.studentName}
-                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-slate-800 text-xs group-hover:text-indigo-600 transition">
+                                {rec.studentName}
+                              </span>
+                              {rec.studentClass && (
+                                <span className="text-[9px] bg-indigo-50 text-indigo-700 font-extrabold px-1.5 py-0.5 rounded-md border border-indigo-100 uppercase font-sans tracking-wide">
+                                  {rec.studentClass}
+                                </span>
+                              )}
+                            </div>
                             {!isBenchmark ? (
                               <span className="text-[9px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.2 rounded inline-block mt-0.5">
                                 Kỷ lục của bạn

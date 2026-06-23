@@ -33,7 +33,8 @@ service cloud.firestore {
     }
 
     match /exams/{examId} {
-      allow read, write: if isAdmin();
+      allow read, create: if true;
+      allow update, delete: if isAdmin();
     }
 
     // Public collections (i.e. questions and testSets)
@@ -43,6 +44,11 @@ service cloud.firestore {
     }
 
     match /testSets/{testSetId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /allowedStudents/{studentId} {
       allow read: if true;
       allow write: if isAdmin();
     }

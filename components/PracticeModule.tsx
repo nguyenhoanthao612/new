@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { IC3_MODULES, IC3Question } from "../lib/ic3data";
-import { useIC3 } from "../lib/ic3store";
+import { useIC3, isUserAdmin } from "../lib/ic3store";
 import { 
   BookOpen, 
   Check, 
@@ -27,7 +27,8 @@ import {
   ArrowDown,
   MapPin,
   RotateCw,
-  GripVertical
+  GripVertical,
+  Eye
 } from "lucide-react";
 
 interface PracticeModuleProps {
@@ -123,8 +124,83 @@ export function checkAnswerCorrectness(q: IC3Question, correctIndexInShuffled: n
   return userAns === correctIndexInShuffled;
 }
 
+export function containsProfanity(text: string): boolean {
+  if (!text) return false;
+  const badWords = [
+    "đm", "dm", "con cặc", "con cac", "vcl", "cl", "địt", "dit", "đệt", "lồn", "lon", "buồi", "buoi", "óc chó", "oc cho", 
+    "chó đẻ", "cho de", "đù má", "du ma", "đụ má", "du me", "dume", "đụ", "mẹ mày", "me may", "mẹ m", "bitch", "fuck", 
+    "shit", "asshole", "pussy", "dick", "ngu lồn", "ngu lon", "ngu chó", "ngu cho", "cặc", "cac", "dcm", "đcm", "đmm", "dmm",
+    "vl", "cc", "loz"
+  ];
+  const normalized = text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, "");
+
+  const words = normalized.split(/\s+/);
+  
+  for (const badWord of badWords) {
+    const cleanBadWord = badWord
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    if (normalized.includes(cleanBadWord)) {
+      return true;
+    }
+    if (words.includes(cleanBadWord)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export default function PracticeModule({ onBackToHome, onStartExam }: PracticeModuleProps) {
-  const { questions, saveExamResult, testSets, examRecords } = useIC3();
+  const { questions, saveExamResult, testSets, examRecords, firebaseUser, allowedStudents } = useIC3();
+
+  // Student name and class states for both display, local storage and online submission
+  const [studentName, setStudentName] = useState("");
+  const [studentClass, setStudentClass] = useState("");
+  const [tempStudentName, setTempStudentName] = useState("");
+  const [tempStudentClass, setTempStudentClass] = useState("");
+  const [showInfoModal, setShowInfoModal] = useState(false);
+  const [infoModalError, setInfoModalError] = useState("");
+  const [selectedClass, setSelectedClass] = useState("");
+  const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [studentPassword, setStudentPassword] = useState("");
+  const [pendingStartArgs, setPendingStartArgs] = useState<{
+    moduleId: "cf" | "ka" | "lo";
+    mode: "training" | "testing" | "race";
+    testSetId?: string;
+  } | null>(null);
+
+  // Load from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedName = localStorage.getItem("ic3_student_name") || "";
+      const savedClass = localStorage.getItem("ic3_student_class") || "";
+      setStudentName(savedName);
+      setStudentClass(savedClass);
+    }
+  }, []);
+
+  // Pre-fill selected Lớp and Học sinh name if they exist in the allowed roster
+  useEffect(() => {
+    if (allowedStudents && allowedStudents.length > 0 && studentName && studentClass) {
+      if (!selectedClass && !selectedStudentId) {
+        const found = allowedStudents.find(
+          (s) =>
+            s.fullName.trim().toLowerCase() === studentName.trim().toLowerCase() &&
+            s.className.trim().toLowerCase() === studentClass.trim().toLowerCase()
+        );
+        if (found) {
+          setSelectedClass(found.className);
+          setSelectedStudentId(found.id);
+        }
+      }
+    }
+  }, [allowedStudents, studentName, studentClass, selectedClass, selectedStudentId]);
 
   // 3 Primary Modes: "training" | "testing" | "race"
   const [activeTab, setActiveTab] = useState<"training" | "testing" | "race">("training");
@@ -139,6 +215,22 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
   const [sessionQuestions, setSessionQuestions] = useState<SessionQuestion[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 
+  // B. Testing Mode States
+  const [isTestActive, setIsTestActive] = useState(false);
+  const [isReviewMode, setIsReviewMode] = useState(false);
+  const [testAnswers, setTestAnswers] = useState<Record<number, any>>({}); // index -> selectedOption index or custom answer state
+  const [finalizedAnswers, setFinalizedAnswers] = useState<Record<number, boolean>>({});
+  const [testTimeLeft, setTestTimeLeft] = useState(50 * 60); // 50 mins
+  const [testResult, setTestResult] = useState<{
+    correctCount: number;
+    wrongCount: number;
+    scoreVal: number;
+    percentRate: number;
+    moduleName: string;
+    moduleId: "cf" | "ka" | "lo";
+    testSetId?: string | null;
+  } | null>(null);
+
   // Interaction answers
   const [chosenOptionIndex, setChosenOptionIndex] = useState<number | null>(null);
   const [isAnswered, setIsAnswered] = useState(false);
@@ -147,18 +239,15 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
   const [selectedMatchingItem, setSelectedMatchingItem] = useState<string | null>(null);
   const [matchingDragOver, setMatchingDragOver] = useState<string | null>(null);
 
-  const hasAnsweredActiveQuestion = () => {
-    if (!sessionQuestions[currentQuestionIndex]) return false;
-    const activeQuestion = sessionQuestions[currentQuestionIndex];
+  const isQuestionIndexAnswered = (idx: number): boolean => {
+    if (!sessionQuestions[idx]) return false;
+    const activeQuestion = sessionQuestions[idx];
     const q = activeQuestion.originalQuestion;
     const type = q.questionType;
-    const ans = testAnswers[currentQuestionIndex];
-    
+    const ans = testAnswers[idx];
+
     if (type === "Multiple Choice" || type === "Video Based" || !type) {
-      if (sessionMode === "testing") {
-        return testAnswers[currentQuestionIndex] !== undefined;
-      }
-      return chosenOptionIndex !== null;
+      return ans !== undefined;
     }
     if (type === "Multiple Select") {
       return Array.isArray(ans) && ans.length > 0;
@@ -169,7 +258,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     if (type === "True / False Multiple") {
       const stmtList = q.statements || [];
       const userTF = ans || {};
-      return stmtList.length > 0 && stmtList.every((_, idx) => userTF[idx] !== undefined);
+      return stmtList.length > 0 && stmtList.every((_, sIdx) => userTF[sIdx] !== undefined);
     }
     if (type === "Matching") {
       const matchPairs = q.matchingPairs || [];
@@ -194,28 +283,42 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     return false;
   };
 
+  const answeredQuestionsCount = useMemo(() => {
+    let count = 0;
+    for (let i = 0; i < sessionQuestions.length; i++) {
+      if (isQuestionIndexAnswered(i)) {
+        count++;
+      }
+    }
+    return count;
+  }, [sessionQuestions, testAnswers]);
+
+  const hasAnsweredActiveQuestion = () => {
+    if (!sessionQuestions[currentQuestionIndex]) return false;
+    const activeQuestion = sessionQuestions[currentQuestionIndex];
+    if (sessionMode !== "testing") {
+      const q = activeQuestion.originalQuestion;
+      const type = q.questionType;
+      if (type === "Multiple Choice" || type === "Video Based" || !type) {
+        return chosenOptionIndex !== null;
+      }
+    }
+    return isQuestionIndexAnswered(currentQuestionIndex);
+  };
+
   useEffect(() => {
     setChosenOptionIndex(null);
     setActiveDragItem(null);
     setSelectedMatchingItem(null);
-  }, [currentQuestionIndex]);
+    if (isReviewMode) {
+      setIsAnswered(true);
+    } else {
+      setIsAnswered(sessionMode === "training" || sessionMode === "race" ? finalizedAnswers[currentQuestionIndex] === true : false);
+    }
+  }, [currentQuestionIndex, sessionMode, finalizedAnswers, isReviewMode]);
 
   // A. Training Mode States
   const [practiceScore, setPracticeScore] = useState({ correct: 0, total: 0 });
-
-  // B. Testing Mode States
-  const [isTestActive, setIsTestActive] = useState(false);
-  const [testAnswers, setTestAnswers] = useState<Record<number, any>>({}); // index -> selectedOption index or custom answer state
-  const [testTimeLeft, setTestTimeLeft] = useState(50 * 60); // 50 mins
-  const [testResult, setTestResult] = useState<{
-    correctCount: number;
-    wrongCount: number;
-    scoreVal: number;
-    percentRate: number;
-    moduleName: string;
-    moduleId: "cf" | "ka" | "lo";
-    testSetId?: string | null;
-  } | null>(null);
 
   // C. Race Mode States
   const [raceRestartCount, setRaceRestartCount] = useState(0);
@@ -280,8 +383,32 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     };
   }, [isTestActive, selectedModule, sessionMode, testResult, raceCompleted, testTimeLeft]);
 
-  // Unified session starting handler
+  // Unified session starting handler (intercepts to gather student name and class)
   const handleStartSession = (moduleId: "cf" | "ka" | "lo", mode: "training" | "testing" | "race", testSetId?: string) => {
+    const targetTestSetId = testSetId || `default_${moduleId}`;
+    const rawList = questions.filter((q) => q.testSetId === targetTestSetId);
+    if (rawList.length === 0) {
+      setShowNoQuestionsModal(true);
+      return;
+    }
+
+    // Skip the Candidate Info Modal if the logged in user is an Administrator
+    if (firebaseUser && isUserAdmin(firebaseUser)) {
+      setStudentName("Quản Trị Viên");
+      setStudentClass("Admin");
+      executeStartSession(moduleId, mode, testSetId);
+      return;
+    }
+
+    setPendingStartArgs({ moduleId, mode, testSetId });
+    setTempStudentName(studentName);
+    setTempStudentClass(studentClass);
+    setInfoModalError("");
+    setShowInfoModal(true);
+  };
+
+  // Internal executor called once student finishes confirming/updating their name & class
+  const executeStartSession = (moduleId: "cf" | "ka" | "lo", mode: "training" | "testing" | "race", testSetId?: string) => {
     const targetTestSetId = testSetId || `default_${moduleId}`;
     const rawList = questions.filter((q) => q.testSetId === targetTestSetId);
     if (rawList.length === 0) {
@@ -324,10 +451,12 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     setSelectedModule(moduleId);
     setSelectedTestSetId(testSetId || null);
     setSessionMode(mode);
+    setIsReviewMode(false);
     setCurrentQuestionIndex(0);
     setChosenOptionIndex(null);
     setIsAnswered(false);
     setTestAnswers({});
+    setFinalizedAnswers({});
     setTestTimeLeft(50 * 60); // 50 mins
     setTestResult(null);
 
@@ -386,6 +515,10 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     }
 
     setIsAnswered(true);
+    setFinalizedAnswers((prev) => ({
+      ...prev,
+      [currentQuestionIndex]: true
+    }));
 
     if (sessionMode === "training") {
       if (isCorrect) {
@@ -423,6 +556,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     setChosenOptionIndex(null);
     setIsAnswered(false);
     setTestAnswers({});
+    setFinalizedAnswers({});
     setTestTimeLeft(50 * 60); // Reset timer fresh for the race attempt
 
     // Re-shuffle the options for the race questions to provide a dynamic challenge
@@ -526,7 +660,9 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
       selectedTestSetId || `default_${selectedModule}`,
       selectedTestSetId 
         ? (testSets.find(t => t.id === selectedTestSetId)?.title || "Bài Ôn Tập") 
-        : activeModInfo?.name
+        : activeModInfo?.name,
+      studentName,
+      studentClass
     );
 
     setTestResult({
@@ -546,7 +682,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
 
   // Confirm manual submission trigger
   const handleManualSubmitTest = () => {
-    const unansweredCount = sessionQuestions.length - Object.keys(testAnswers).length;
+    const unansweredCount = sessionQuestions.length - answeredQuestionsCount;
     if (unansweredCount > 0) {
       setShowAnswersWarning(true);
     } else {
@@ -560,6 +696,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
     setSelectedTestSetId(null);
     setSessionMode(null);
     setIsTestActive(false);
+    setIsReviewMode(false);
     setTestResult(null);
     setRaceCompleted(false);
     if (timerRef.current) clearInterval(timerRef.current);
@@ -906,28 +1043,52 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
         </div>
       )}
 
-      {/* ACTIVE TRAINING or RACE WORKSPACE */}
-      {!isTestActive && selectedModule && activeQuestion && activeModuleInfo && !testResult && !raceCompleted && (
+      {/* ACTIVE TRAINING, RACE OR REVIEW WORKSPACE */}
+      {((!isTestActive && selectedModule && activeQuestion && activeModuleInfo && !testResult && !raceCompleted) || (isReviewMode && activeQuestion && activeModuleInfo)) && (
         <div className="bg-white border border-slate-100 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 animate-fade-in" id="active-space-practice">
           
           {/* Header Progress panel */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
             <div className="space-y-1 text-left">
               <div className="flex flex-wrap items-center gap-2">
-                {getLevelBadge(selectedModule)}
-                <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 border rounded-md font-mono ${
-                  sessionMode === "race" 
-                    ? "text-rose-700 bg-rose-50 border-rose-200" 
-                    : sessionMode === "testing"
-                      ? "text-indigo-700 bg-indigo-50 border-indigo-200"
-                      : "text-emerald-700 bg-emerald-50 border-emerald-200"
+                {selectedModule && getLevelBadge(selectedModule)}
+                 <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 border rounded-md font-mono ${
+                  isReviewMode
+                    ? "text-purple-700 bg-purple-50 border-purple-200"
+                    : sessionMode === "race" 
+                      ? "text-rose-700 bg-rose-50 border-rose-200" 
+                      : sessionMode === "testing"
+                        ? "text-indigo-700 bg-indigo-50 border-indigo-200"
+                        : "text-emerald-700 bg-emerald-50 border-emerald-200"
                 }`}>
-                  {sessionMode === "race" 
-                    ? "🔥 RACE MODE (KHÔNG ĐƯỢC PHÉP SAI)" 
-                    : sessionMode === "testing"
-                      ? "📝 TESTING (MÔ PHỎNG ĐỀ THI)"
-                      : "🌱 TRAINING (HỌC ÔN TẬP)"}
+                  {isReviewMode
+                    ? "🔍 REVIEW (XEM LẠI ĐÁP ÁN ĐÃ THI)"
+                    : sessionMode === "race" 
+                      ? "🔥 RACE MODE (KHÔNG ĐƯỢC PHÉP SAI)" 
+                      : sessionMode === "testing"
+                        ? "📝 TESTING (MÔ PHỎNG ĐỀ THI)"
+                        : "🌱 TRAINING (HỌC ÔN TẬP)"}
                 </span>
+
+                {isReviewMode && (
+                  <span className={`text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-md border font-mono ${
+                    (() => {
+                      const qRaw = activeQuestion.originalQuestion;
+                      const userAns = testAnswers[currentQuestionIndex];
+                      const isCorrect = checkAnswerCorrectness(qRaw, activeQuestion.correctIndexInShuffled, userAns);
+                      return isCorrect 
+                        ? "text-emerald-700 bg-emerald-50 border-emerald-250 animate-pulse" 
+                        : "text-rose-700 bg-rose-50 border-rose-250 animate-pulse";
+                    })()
+                  }`}>
+                    {(() => {
+                      const qRaw = activeQuestion.originalQuestion;
+                      const userAns = testAnswers[currentQuestionIndex];
+                      const isCorrect = checkAnswerCorrectness(qRaw, activeQuestion.correctIndexInShuffled, userAns);
+                      return isCorrect ? "✓ CHÍNH XÁC" : "✗ BỊ SAI";
+                    })()}
+                  </span>
+                )}
               </div>
               <h3 className="text-base font-extrabold text-slate-900 mt-2">
                 Tiến trình: Câu <span className="text-indigo-600 font-black">{currentQuestionIndex + 1}</span> / {sessionQuestions.length}
@@ -972,7 +1133,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                 <div className="bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-xl text-xs font-semibold text-indigo-800 space-y-0.5">
                   <span className="text-[9px] font-extrabold uppercase text-indigo-400 block tracking-wider leading-none font-mono">Đã hoàn thành</span>
                   <p className="text-indigo-950 font-black text-xs leading-none">
-                    Đã chọn: <strong className="text-indigo-600 font-extrabold text-xs">{Object.keys(testAnswers).length}</strong>/{sessionQuestions.length} câu
+                    Đã chọn: <strong className="text-indigo-600 font-extrabold text-xs">{answeredQuestionsCount}</strong>/{sessionQuestions.length} câu
                   </p>
                 </div>
               ) : (
@@ -987,13 +1148,15 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
           </div>
 
           {/* Question JUMP map for Testing / Practice */}
-          {(sessionMode === "testing" || sessionMode === "training") && (
+          {(sessionMode === "testing" || sessionMode === "training" || isReviewMode) && (
             <div className="space-y-2.5 text-left bg-slate-50 border border-slate-100 p-4.5 rounded-2xl animate-fade-in shadow-sm">
               <span className="text-[10px] uppercase text-slate-450 font-extrabold tracking-wider font-mono">Bản đồ câu hỏi bộ đề</span>
               <div className="flex flex-wrap gap-1.5" id="unified-questions-jump-map">
                 {sessionQuestions.map((_, idx) => {
                   const isSelected = idx === currentQuestionIndex;
                   const isAnsweredQ = testAnswers[idx] !== undefined;
+                  const qRaw = _.originalQuestion;
+                  const isCorrectReview = isReviewMode && checkAnswerCorrectness(qRaw, _.correctIndexInShuffled, testAnswers[idx]);
 
                   return (
                     <button
@@ -1002,14 +1165,18 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                       onClick={() => {
                         setCurrentQuestionIndex(idx);
                         setChosenOptionIndex(null);
-                        setIsAnswered(sessionMode === "training" ? testAnswers[idx] !== undefined : false);
+                        setIsAnswered(isReviewMode ? true : (sessionMode === "training" ? testAnswers[idx] !== undefined : false));
                       }}
                       className={`w-8 h-8 rounded-lg text-xs font-bold font-mono transition flex items-center justify-center cursor-pointer ${
                         isSelected 
                           ? "bg-indigo-600 text-white ring-2 ring-indigo-400" 
-                          : isAnsweredQ 
-                            ? "bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold" 
-                            : "bg-white border border-slate-200 text-slate-500 hover:bg-slate-50"
+                          : isReviewMode
+                            ? isCorrectReview
+                              ? "bg-emerald-50 border border-emerald-350 text-emerald-800 font-extrabold"
+                              : "bg-rose-50 border border-rose-350 text-rose-800 font-extrabold"
+                            : isAnsweredQ 
+                              ? "bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold" 
+                              : "bg-white border border-slate-200 text-slate-500 hover:bg-slate-50"
                       }`}
                     >
                       {idx + 1}
@@ -1066,7 +1233,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                   <div className="grid grid-cols-1 gap-3 text-left">
                     {activeQuestion.shuffledOptions.map((opt, idx) => {
                       const isCorrectOpt = idx === activeQuestion.correctIndexInShuffled;
-                      const isChosen = sessionMode === "testing"
+                      const isChosen = (sessionMode === "testing" || isReviewMode || isAnswered)
                         ? testAnswers[currentQuestionIndex] === idx
                         : idx === chosenOptionIndex;
 
@@ -1251,6 +1418,44 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                       const isCorrectTrue = stmtItem.answer === true;
                       const isCorrectFalse = stmtItem.answer === false;
 
+                      let trueBtnStyle = "border-slate-250 bg-slate-50 text-slate-600 hover:bg-slate-100";
+                      if (isAnswered) {
+                        if (isCorrectTrue) {
+                          if (isSelectedTrue) {
+                            trueBtnStyle = "bg-emerald-600 border-emerald-500 text-white font-extrabold";
+                          } else {
+                            trueBtnStyle = "bg-emerald-50 border-emerald-300 text-emerald-800 font-bold";
+                          }
+                        } else {
+                          if (isSelectedTrue) {
+                            trueBtnStyle = "bg-rose-600 border-rose-500 text-white font-extrabold";
+                          } else {
+                            trueBtnStyle = "opacity-40 bg-zinc-50 border-zinc-100 text-zinc-350 cursor-not-allowed";
+                          }
+                        }
+                      } else if (isSelectedTrue) {
+                        trueBtnStyle = "bg-indigo-600 border-indigo-500 text-white font-extrabold ring-2 ring-indigo-400/20";
+                      }
+
+                      let falseBtnStyle = "border-slate-250 bg-slate-50 text-slate-600 hover:bg-slate-100";
+                      if (isAnswered) {
+                        if (isCorrectFalse) {
+                          if (isSelectedFalse) {
+                            falseBtnStyle = "bg-emerald-600 border-emerald-500 text-white font-extrabold";
+                          } else {
+                            falseBtnStyle = "bg-emerald-50 border-emerald-300 text-emerald-800 font-bold";
+                          }
+                        } else {
+                          if (isSelectedFalse) {
+                            falseBtnStyle = "bg-rose-600 border-rose-500 text-white font-extrabold";
+                          } else {
+                            falseBtnStyle = "opacity-40 bg-zinc-50 border-zinc-100 text-zinc-350 cursor-not-allowed";
+                          }
+                        }
+                      } else if (isSelectedFalse) {
+                        falseBtnStyle = "bg-indigo-600 border-indigo-500 text-white font-extrabold ring-2 ring-indigo-400/20";
+                      }
+
                       return (
                         <div key={idx} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white">
                           <div className="flex-1 font-semibold text-slate-800 leading-relaxed">
@@ -1265,13 +1470,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                                 const updated = { ...userTFAnswers, [idx]: true };
                                 setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
                               }}
-                              className={`px-4 py-1.5 rounded-lg text-xs font-bold border transition duration-150 ${
-                                isSelectedTrue
-                                  ? "bg-emerald-600 border-emerald-500 text-white"
-                                  : isAnswered && isCorrectTrue
-                                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                                  : "border-slate-250 bg-slate-50 text-slate-600 hover:bg-slate-100"
-                              }`}
+                              className={`px-4 py-1.5 rounded-lg text-xs font-bold border transition duration-150 ${trueBtnStyle}`}
                             >
                               Đúng
                             </button>
@@ -1281,13 +1480,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
                                 const updated = { ...userTFAnswers, [idx]: false };
                                 setTestAnswers(prev => ({ ...prev, [currentQuestionIndex]: updated }));
                               }}
-                              className={`px-4 py-1.5 rounded-lg text-xs font-bold border transition duration-150 ${
-                                isSelectedFalse
-                                  ? "bg-rose-600 border-rose-500 text-white"
-                                  : isAnswered && isCorrectFalse
-                                  ? "bg-rose-50 border-rose-300 text-rose-800"
-                                  : "border-slate-250 bg-slate-50 text-slate-600 hover:bg-slate-100"
-                              }`}
+                              className={`px-4 py-1.5 rounded-lg text-xs font-bold border transition duration-150 ${falseBtnStyle}`}
                             >
                               Sai
                             </button>
@@ -1309,7 +1502,36 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
 
               const handleSelection = (leftVal: string, rightVal: string) => {
                 if (isAnswered) return;
-                const updated = { ...userMatches, [leftVal]: rightVal };
+                
+                // Tìm xem vế phải này đã được gán cho một vế trái nào khác chưa
+                let oldLeftVal: string | null = null;
+                for (const [k, v] of Object.entries(userMatches)) {
+                  if (v === rightVal && k !== leftVal) {
+                    oldLeftVal = k;
+                    break;
+                  }
+                }
+
+                const updated = { ...userMatches };
+
+                if (oldLeftVal) {
+                  // Vế phải đã nằm ở một vị trí cũ (oldLeftVal)
+                  // Kiểm tra xem vị trí hiện tại (leftVal) đã có sẵn vế phải nào khác chưa
+                  const oldRightVal = userMatches[leftVal];
+                  if (oldRightVal) {
+                    // Đổi chỗ hai vế cho nhau hoàn toàn
+                    updated[leftVal] = rightVal;
+                    updated[oldLeftVal] = oldRightVal;
+                  } else {
+                    // Chuyển vế phải sang vị trí mới và xóa trống vị trí cũ
+                    updated[leftVal] = rightVal;
+                    delete updated[oldLeftVal];
+                  }
+                } else {
+                  // Vế phải chưa được gán ở đâu cả (được kéo từ kho hoặc đang chọn mới)
+                  updated[leftVal] = rightVal;
+                }
+
                 setTestAnswers((prev) => ({ ...prev, [currentQuestionIndex]: updated }));
                 setSelectedMatchingItem(null);
               };
@@ -1957,7 +2179,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               <div className="grid grid-cols-1 gap-3 text-left" id="prac-options-container">
                 {activeQuestion.shuffledOptions.map((opt, idx) => {
                   const isCorrectOpt = idx === activeQuestion.correctIndexInShuffled;
-                  const isChosen = sessionMode === "testing"
+                  const isChosen = (sessionMode === "testing" || isReviewMode || isAnswered)
                     ? testAnswers[currentQuestionIndex] === idx
                     : idx === chosenOptionIndex;
 
@@ -2006,7 +2228,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
           })()}
 
           {/* Explanation panel upon answering */}
-          {isAnswered && sessionMode !== "training" && (
+          {isAnswered && (sessionMode !== "training" || isReviewMode) && (
             <div className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-5 text-left space-y-2.5 animate-fade-in" id="practice-expl-card">
               <div className="flex items-center gap-1.5 font-extrabold text-indigo-900 text-xs">
                 <MessageSquare className="w-4 h-4 text-indigo-600" />
@@ -2020,15 +2242,49 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
 
           {/* Options actions footer */}
           <div className="flex items-center justify-between border-t border-slate-100 pt-5">
-            <button
-              onClick={handleExitSession}
-              className="px-4 py-2 hover:bg-slate-100 text-slate-500 font-bold border border-slate-200 hover:border-slate-300 rounded-xl text-xs transition cursor-pointer font-mono"
-            >
-              {sessionMode === "testing" ? "Hủy đề thi thử" : "Thoát chặng ôn"}
-            </button>
+            {isReviewMode ? (
+              <button
+                onClick={() => {
+                  setIsReviewMode(false);
+                }}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-extrabold rounded-xl text-xs transition uppercase shadow cursor-pointer font-mono flex items-center gap-1.5"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                Quay lại Báo cáo
+              </button>
+            ) : (
+              <button
+                onClick={handleExitSession}
+                className="px-4 py-2 hover:bg-slate-100 text-slate-500 font-bold border border-slate-200 hover:border-slate-300 rounded-xl text-xs transition cursor-pointer font-mono"
+              >
+                {sessionMode === "testing" ? "Hủy đề thi thử" : "Thoát chặng ôn"}
+              </button>
+            )}
 
             <div className="flex items-center gap-2">
-              {sessionMode === "testing" ? (
+              {isReviewMode ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    disabled={currentQuestionIndex === 0}
+                    onClick={() => {
+                      setCurrentQuestionIndex((prev) => prev - 1);
+                    }}
+                    className="px-4 py-2.5 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition cursor-pointer font-mono"
+                  >
+                    Quay lại
+                  </button>
+
+                  <button
+                    disabled={currentQuestionIndex === sessionQuestions.length - 1}
+                    onClick={() => {
+                      setCurrentQuestionIndex((prev) => prev + 1);
+                    }}
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-30 disabled:pointer-events-none text-white rounded-xl text-xs font-black transition cursor-pointer font-mono"
+                  >
+                    Tiếp theo
+                  </button>
+                </div>
+              ) : sessionMode === "testing" ? (
                 <div className="flex items-center gap-2">
                   <button
                     disabled={currentQuestionIndex === 0}
@@ -2852,7 +3108,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
       )}
 
       {/* TESTING RESULTS REPORT */}
-      {testResult && (
+      {testResult && !isReviewMode && (
         <div className="bg-white border border-slate-100 rounded-3xl p-6 md:p-8 shadow-sm space-y-8 animate-sweep-up" id="testing-report-stage">
           
           <div className="text-center max-w-xl mx-auto space-y-2">
@@ -3036,6 +3292,17 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               Hoàn Tất Khảo Sát
             </button>
 
+            <button
+              onClick={() => {
+                setIsReviewMode(true);
+                setCurrentQuestionIndex(0);
+              }}
+              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer font-mono uppercase"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              Xem lại đáp án
+            </button>
+
             {sessionMode !== "race" && (
               <button
                 onClick={() => handleStartSession(testResult.moduleId, sessionMode || "training", testResult.testSetId || undefined)}
@@ -3159,11 +3426,11 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               </div>
               <div className="flex justify-between items-center pb-2 border-b border-slate-200/60">
                 <span>Số câu đã hoàn thành:</span>
-                <span className="font-bold text-indigo-600">{Object.keys(testAnswers).length} câu</span>
+                <span className="font-bold text-indigo-600">{answeredQuestionsCount} câu</span>
               </div>
               <div className="flex justify-between items-center">
                 <span>Số câu bỏ trống chưa làm:</span>
-                <span className="font-bold text-rose-500">{sessionQuestions.length - Object.keys(testAnswers).length} câu</span>
+                <span className="font-bold text-rose-500">{sessionQuestions.length - answeredQuestionsCount} câu</span>
               </div>
             </div>
 
@@ -3208,7 +3475,7 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
             <div className="space-y-3.5 text-xs text-slate-600 font-semibold bg-slate-50 p-4.5 rounded-2xl border border-slate-150">
               <p className="text-slate-550 text-slate-500 leading-relaxed">
                 {sessionMode === "training"
-                  ? "Bạn chưa hoàn thiện toàn bộ câu hỏi. Vui lòng kiểm tra lại trước khi hoàn thành bài ôn luyện."
+                   ? "Bạn chưa hoàn thiện toàn bộ câu hỏi. Vui lòng kiểm tra lại trước khi hoàn thành bài ôn luyện."
                   : "Bạn không thể nộp bài thi thử vì có câu hỏi bỏ trống chưa được hoàn thiện. Vui lòng kiểm tra lại."}
               </p>
               <div className="flex justify-between items-center pb-2 border-b border-slate-200/60">
@@ -3217,11 +3484,11 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
               </div>
               <div className="flex justify-between items-center pb-2 border-b border-slate-200/60">
                 <span>Số câu đã làm:</span>
-                <span className="font-semibold text-emerald-600">{Object.keys(testAnswers).length} câu</span>
+                <span className="font-semibold text-emerald-600">{answeredQuestionsCount} câu</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-rose-550 text-rose-500">Số câu bỏ trống:</span>
-                <span className="font-black text-rose-600 font-mono text-sm">{sessionQuestions.length - Object.keys(testAnswers).length} câu</span>
+                <span className="font-black text-rose-600 font-mono text-sm">{sessionQuestions.length - answeredQuestionsCount} câu</span>
               </div>
             </div>
 
@@ -3293,6 +3560,167 @@ export default function PracticeModule({ onBackToHome, onStartExam }: PracticeMo
           </div>
         </div>
       )}
+
+      {/* CANDIDATE INFO POPUP DIALOG */}
+      {showInfoModal && (() => {
+        const uniqueClasses = Array.from(new Set((allowedStudents || []).map((s) => s.className.trim())))
+          .filter(Boolean)
+          .sort();
+
+        const filteredStudents = (allowedStudents || []).filter(
+          (s) => s.className.trim() === selectedClass.trim()
+        );
+
+        const handleConfirmStudentAuth = () => {
+          if (!selectedClass) {
+            setInfoModalError("Vui lòng chọn Lớp học.");
+            return;
+          }
+          if (!selectedStudentId) {
+            setInfoModalError("Vui lòng chọn Họ và Tên của bạn.");
+            return;
+          }
+          if (!studentPassword) {
+            setInfoModalError("Vui lòng nhập mật khẩu vào thi.");
+            return;
+          }
+
+          const matchedStudent = (allowedStudents || []).find((s) => s.id === selectedStudentId);
+          if (!matchedStudent) {
+            setInfoModalError("Không tìm thấy học sinh này trong hệ thống.");
+            return;
+          }
+
+          if (matchedStudent.password !== studentPassword.trim()) {
+            setInfoModalError("Mật khẩu không chính xác! Vui lòng thử lại.");
+            return;
+          }
+
+          // Clear modal error and set active student name & class
+          setStudentName(matchedStudent.fullName);
+          setStudentClass(matchedStudent.className);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("ic3_student_name", matchedStudent.fullName);
+            localStorage.setItem("ic3_student_class", matchedStudent.className);
+          }
+
+          setShowInfoModal(false);
+          setInfoModalError("");
+          setStudentPassword(""); // clear standard state password
+
+          if (pendingStartArgs) {
+            executeStartSession(pendingStartArgs.moduleId, pendingStartArgs.mode, pendingStartArgs.testSetId);
+            setPendingStartArgs(null);
+          }
+        };
+
+        return (
+          <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white rounded-3xl border border-slate-100 p-6 md:p-8 max-w-md w-full shadow-2xl space-y-5 text-left">
+              <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <ShieldCheck className="w-6 h-6 shrink-0" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-950">Thông Tin Khảo Thí</h3>
+                  <p className="text-[11px] text-slate-500 font-mono">VERIFY CANDIDATE CREDENTIALS</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-500 leading-relaxed font-semibold">
+                Chào mừng bạn! Vui lòng chọn Lớp, tìm Họ và tên được kích hoạt bởi giáo viên/quản trị viên, và nhập mật khẩu của bạn để bắt đầu làm bài ôn luyện.
+              </p>
+
+              <div className="space-y-4 font-sans text-xs">
+                {/* 1. LỚP DROPDOWN */}
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700 font-bold">Lớp học <span className="text-rose-500">*</span></label>
+                  <select
+                    value={selectedClass}
+                    onChange={(e) => {
+                      setSelectedClass(e.target.value);
+                      setSelectedStudentId(""); // Reset student selection
+                      setInfoModalError("");
+                    }}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-500 outline-none transition font-bold text-slate-900 cursor-pointer"
+                  >
+                    <option value="">-- Chọn Lớp học của bạn --</option>
+                    {uniqueClasses.map((cls) => (
+                      <option key={cls} value={cls}>Lớp {cls}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 2. HỌ VÀ TÊN DROPDOWN */}
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700 font-bold">Họ và Tên thí sinh <span className="text-rose-500">*</span></label>
+                  <select
+                    value={selectedStudentId}
+                    onChange={(e) => {
+                      setSelectedStudentId(e.target.value);
+                      setInfoModalError("");
+                    }}
+                    disabled={!selectedClass}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-500 outline-none transition font-bold text-slate-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">
+                      {!selectedClass ? "<- Vui lòng chọn lớp trước" : "-- Chọn đúng Họ và Tên của bạn --"}
+                    </option>
+                    {filteredStudents.map((s) => (
+                      <option key={s.id} value={s.id}>{s.fullName}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 3. MẬT KHẨU PHÒNG THI */}
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700 font-bold">Mật khẩu phòng thi <span className="text-rose-500">*</span></label>
+                  <input
+                    type="password"
+                    placeholder="Nhập mật khẩu được cấp"
+                    value={studentPassword}
+                    onChange={(e) => {
+                      setStudentPassword(e.target.value);
+                      setInfoModalError("");
+                    }}
+                    disabled={!selectedStudentId}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-500 outline-none transition font-semibold text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed font-mono tracking-widest text-center"
+                  />
+                </div>
+
+                {infoModalError && (
+                  <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 rounded-xl flex items-center gap-2 font-medium">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{infoModalError}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 justify-end pt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInfoModal(false);
+                    setPendingStartArgs(null);
+                    setStudentPassword("");
+                  }}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition cursor-pointer"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedStudentId || !studentPassword}
+                  onClick={handleConfirmStudentAuth}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl text-xs transition shadow-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Xác nhận & Vào làm bài
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );

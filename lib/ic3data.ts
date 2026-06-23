@@ -57,6 +57,7 @@ export interface ExamRecord {
   id: string;
   userId: string;
   studentName: string;
+  studentClass?: string;
   module: "cf" | "ka" | "lo";
   score: number; // Percentage or correct / total
   correctCount: number;
@@ -85,6 +86,14 @@ export interface UploadedDocument {
   name: string;
   size: number;
   type: string;
+  createdAt: number;
+}
+
+export interface AllowedStudent {
+  id: string;
+  fullName: string;
+  className: string;
+  password?: string;
   createdAt: number;
 }
 

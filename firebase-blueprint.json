@@ -87,6 +87,10 @@
           "type": "string",
           "description": "The display name of the candidate."
         },
+        "studentClass": {
+          "type": "string",
+          "description": "The class or section the candidate belongs to."
+        },
         "module": {
           "type": "string",
           "enum": ["cf", "ka", "lo"],
@@ -277,6 +281,34 @@
         }
       },
       "required": ["title", "level", "duration", "passingScore", "createdAt", "updatedAt"]
+    },
+    "AllowedStudent": {
+      "title": "Allowed Student",
+      "description": "Roster of allowed students configured by admins with their password for login authentication.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The unique document ID."
+        },
+        "fullName": {
+          "type": "string",
+          "description": "The student's full name."
+        },
+        "className": {
+          "type": "string",
+          "description": "The class the student belongs to."
+        },
+        "password": {
+          "type": "string",
+          "description": "Passcode assigned by the administrator."
+        },
+        "createdAt": {
+          "type": "integer",
+          "description": "Creation timestamp."
+        }
+      },
+      "required": ["fullName", "className", "password", "createdAt"]
     }
   },
   "firestore": {
@@ -303,6 +335,10 @@
     "/testSets/{testSetId}": {
       "schema": "TestSet",
       "description": "Customized user practice exam structures."
+    },
+    "/allowedStudents/{studentId}": {
+      "schema": "AllowedStudent",
+      "description": "Roster of students allowed to take exams under secure passcodes."
     }
   }
 }

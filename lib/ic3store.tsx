@@ -18,7 +18,7 @@ import {
   setDoc
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { UserProgress, ExamRecord, Classroom, UploadedDocument, IC3Question, SAMPLE_QUESTIONS, TestSet } from "./ic3data";
+import { UserProgress, ExamRecord, Classroom, UploadedDocument, IC3Question, SAMPLE_QUESTIONS, TestSet, AllowedStudent } from "./ic3data";
 
 export enum OperationType {
   CREATE = 'create',
@@ -84,7 +84,16 @@ interface IC3ContextType {
   resetPassword: (email: string) => Promise<void>;
   joinClassroom: (code: string) => Promise<void>;
   createClassroom: (name: string) => Promise<string>;
-  saveExamResult: (module: "cf" | "ka" | "lo", correctCount: number, totalQuestions: number, timeSpent: number, testSetId?: string, testSetTitle?: string) => Promise<void>;
+  saveExamResult: (
+    module: "cf" | "ka" | "lo",
+    correctCount: number,
+    totalQuestions: number,
+    timeSpent: number,
+    testSetId?: string,
+    testSetTitle?: string,
+    customStudentName?: string,
+    customStudentClass?: string
+  ) => Promise<void>;
   updateUserRole: (newRole: "student" | "teacher" | "admin") => Promise<void>;
   uploadDocument: (name: string, size: number, type: string) => Promise<string>;
   deleteDocument: (docId: string) => Promise<void>;
@@ -95,6 +104,10 @@ interface IC3ContextType {
   updateTestSet: (tId: string, t: Partial<TestSet>) => Promise<void>;
   deleteTestSet: (tId: string) => Promise<void>;
   duplicateTestSet: (tId: string) => Promise<string>;
+  allowedStudents: AllowedStudent[];
+  addAllowedStudent: (fullName: string, className: string, passwordString: string) => Promise<void>;
+  deleteAllowedStudent: (studentId: string) => Promise<void>;
+  updateAllowedStudent: (studentId: string, fullName: string, className: string, passwordString: string) => Promise<void>;
 }
 
 const IC3Context = createContext<IC3ContextType | undefined>(undefined);
@@ -158,6 +171,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
   const [questions, setQuestions] = useState<IC3Question[]>([]);
   const [dbTestSets, setDbTestSets] = useState<TestSet[]>([]);
   const [testSets, setTestSets] = useState<TestSet[]>([]);
+  const [allowedStudents, setAllowedStudents] = useState<AllowedStudent[]>([]);
 
   // Guest users state saved to localStorage
   const [localExamRecords, setLocalExamRecords] = useState<ExamRecord[]>([]);
@@ -340,6 +354,33 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, []);
 
+  // Listen to all Allowed Students (Publicly accessible to match logins)
+  useEffect(() => {
+    const studentsQuery = collection(db, "allowedStudents");
+    const unsubscribe = onSnapshot(studentsQuery, (snapshot) => {
+      const list: AllowedStudent[] = [];
+      snapshot.forEach((d) => {
+        const data = d.data();
+        list.push({
+          id: d.id,
+          fullName: data.fullName || "",
+          className: data.className || "",
+          password: data.password || "",
+          createdAt: data.createdAt || Date.now(),
+        } as AllowedStudent);
+      });
+      setAllowedStudents(
+        list.sort((a, b) => 
+          (a.className || "").localeCompare(b.className || "") || 
+          (a.fullName || "").localeCompare(b.fullName || "")
+        )
+      );
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, "allowedStudents");
+    });
+    return () => unsubscribe();
+  }, []);
+
   // Merge dbTestSets with DEFAULT_TEST_SETS
   useEffect(() => {
     const combined = [...DEFAULT_TEST_SETS];
@@ -400,34 +441,42 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  // Listen to cloud collections IF admin is logged in. Otherwise, fall back to local elements.
+  // Listen to cloud collections. Everyone (including guests) gets the exams from Firestore
+  // for real-time leaderboard sync. Admin gets other management rosters.
   useEffect(() => {
-    if (!firebaseUser || !isUserAdmin(firebaseUser)) {
-      setExamRecords(localExamRecords);
-      setClassrooms([]);
-      setDocuments([]);
-      setAllUsers([]);
-      return;
-    }
-
     let unsubExams = () => {};
     let unsubClasses = () => {};
     let unsubDocs = () => {};
     let unsubUsers = () => {};
 
-    // 1. Listen to all Exams
-    const examsQuery = collection(db, "exams");
-    unsubExams = onSnapshot(examsQuery, (snapshot) => {
-      const records: ExamRecord[] = [];
-      snapshot.forEach((d) => {
-        records.push({ id: d.id, ...d.data() } as ExamRecord);
+    // 1. Listen to all Exams (always synced online for everyone!)
+    try {
+      const examsQuery = collection(db, "exams");
+      unsubExams = onSnapshot(examsQuery, (snapshot) => {
+        const records: ExamRecord[] = [];
+        snapshot.forEach((d) => {
+          records.push({ id: d.id, ...d.data() } as ExamRecord);
+        });
+        setExamRecords(records.sort((a, b) => b.createdAt - a.createdAt));
+      }, (err) => {
+        console.error("Failed to snapshot exams online, using local cache:", err);
+        setExamRecords(localExamRecords);
       });
-      setExamRecords(records.sort((a, b) => b.createdAt - a.createdAt));
-    }, (err) => {
-      handleFirestoreError(err, OperationType.GET, "exams");
-    });
+    } catch (e) {
+      console.error("Failed to connect to exams db:", e);
+      setExamRecords(localExamRecords);
+    }
 
-    // 2. Listen to all Classrooms
+    if (!firebaseUser || !isUserAdmin(firebaseUser)) {
+      setClassrooms([]);
+      setDocuments([]);
+      setAllUsers([]);
+      return () => {
+        unsubExams();
+      };
+    }
+
+    // 2. Listen to all Classrooms (Admin only)
     const classesQuery = collection(db, "classrooms");
     unsubClasses = onSnapshot(classesQuery, (snapshot) => {
       const list: Classroom[] = [];
@@ -439,7 +488,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       handleFirestoreError(err, OperationType.GET, "classrooms");
     });
 
-    // 3. Listen to all Users
+    // 3. Listen to all Users (Admin only)
     const usersQuery = collection(db, "users");
     unsubUsers = onSnapshot(usersQuery, (snapshot) => {
       const list: UserProgress[] = [];
@@ -451,7 +500,7 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       handleFirestoreError(err, OperationType.GET, "users");
     });
 
-    // 4. Listen to all Documents
+    // 4. Listen to all Documents (Admin only)
     const docsQuery = collection(db, "documents");
     unsubDocs = onSnapshot(docsQuery, (snapshot) => {
       const list: UploadedDocument[] = [];
@@ -536,22 +585,28 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Saves simulated exam results dynamically (either locally for guests or to Firestore for Admin)
+  // Saves simulated exam results dynamically. Supports online submissions for all student names & classes
   const saveExamResult = async (
     module: "cf" | "ka" | "lo",
     correctCount: number,
     totalQuestions: number,
     timeSpent: number,
     testSetId?: string,
-    testSetTitle?: string
+    testSetTitle?: string,
+    customStudentName?: string,
+    customStudentClass?: string
   ) => {
     const ratio = correctCount / totalQuestions;
     const scoreVal = Math.round(ratio * 1000);
     const passed = scoreVal >= 700;
 
+    const resolvedName = customStudentName?.trim() || (firebaseUser ? "Quản Trị Viên" : "Thí sinh tự do");
+    const resolvedClass = customStudentClass?.trim() || "";
+
     const record: Omit<ExamRecord, "id"> = {
       userId: firebaseUser ? firebaseUser.uid : "guest_candidate",
-      studentName: firebaseUser ? "Quản Trị Viên" : "Thí sinh tự do",
+      studentName: resolvedName,
+      studentClass: resolvedClass,
       module,
       score: scoreVal,
       correctCount,
@@ -563,13 +618,11 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
       testSetTitle: testSetTitle || ""
     };
 
-    if (isUserAdmin(firebaseUser)) {
-      try {
-        await addDoc(collection(db, "exams"), record);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, "exams");
-      }
-    } else {
+    // Always attempt online submission to Firestore first!
+    try {
+      await addDoc(collection(db, "exams"), record);
+    } catch (err) {
+      console.warn("Firestore saveExamResult failed, falling back to local memory storage:", err);
       const newLocalRecord: ExamRecord = {
         id: `local_${Date.now()}`,
         ...record
@@ -695,6 +748,51 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const addAllowedStudent = async (fullName: string, className: string, passwordString: string) => {
+    if (isUserAdmin(firebaseUser)) {
+      try {
+        await addDoc(collection(db, "allowedStudents"), {
+          fullName: fullName.trim(),
+          className: className.trim(),
+          password: passwordString.trim(),
+          createdAt: Date.now()
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, "allowedStudents");
+      }
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được thêm học sinh.");
+    }
+  };
+
+  const deleteAllowedStudent = async (studentId: string) => {
+    if (isUserAdmin(firebaseUser)) {
+      try {
+        await deleteDoc(doc(db, "allowedStudents", studentId));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `allowedStudents/${studentId}`);
+      }
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được xóa học sinh.");
+    }
+  };
+
+  const updateAllowedStudent = async (studentId: string, fullName: string, className: string, passwordString: string) => {
+    if (isUserAdmin(firebaseUser)) {
+      try {
+        await updateDoc(doc(db, "allowedStudents", studentId), {
+          fullName: fullName.trim(),
+          className: className.trim(),
+          password: passwordString.trim()
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `allowedStudents/${studentId}`);
+      }
+    } else {
+      throw new Error("Chỉ Quản trị viên mới được chỉnh sửa học sinh.");
+    }
+  };
+
   return (
     <IC3Context.Provider
       value={{
@@ -724,7 +822,11 @@ export function IC3Provider({ children }: { children: React.ReactNode }) {
         addTestSet,
         updateTestSet,
         deleteTestSet,
-        duplicateTestSet
+        duplicateTestSet,
+        allowedStudents,
+        addAllowedStudent,
+        deleteAllowedStudent,
+        updateAllowedStudent
       }}
     >
       {children}
